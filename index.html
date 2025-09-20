@@ -16,12 +16,17 @@
       getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
       signInWithEmailAndPassword, signOut, signInWithCustomToken
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
-    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+    import {
+      getFirestore, doc, setDoc, onSnapshot,
+      collection, addDoc, serverTimestamp,
+      query, where, orderBy, limit, getDocs
+    } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
     window.firebase = {
-      initializeApp, getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
-      signInWithEmailAndPassword, signOut, signInWithCustomToken,
-      getFirestore, doc, setDoc, onSnapshot
+      initializeApp, getAuth, onAuthStateChanged,
+      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, signInWithCustomToken,
+      getFirestore, doc, setDoc, onSnapshot,
+      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
     };
   </script>
 
@@ -41,7 +46,8 @@
     const {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, signInWithCustomToken,
-      getFirestore, doc, setDoc, onSnapshot
+      getFirestore, doc, setDoc, onSnapshot,
+      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
     } = window.firebase;
 
     /* ====== 常數 ====== */
@@ -57,11 +63,11 @@
       '支援樹林':'bg-lime-200 text-lime-800',
     };
 
-    // 共用工作區路徑（所有人看同一份）
+    // 共用工作區（所有人看同一份）
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = localStorage.getItem('workspaceId') || 'main';
 
-    // 你的 Firebase 設定（不使用 analytics）
+    // Firebase 設定（不使用 analytics）
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
       authDomain: "zhenan-scheduler.firebaseapp.com",
@@ -72,479 +78,20 @@
     };
     const initialAuthToken = (typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null);
 
-    /* ====== 營業時間與班別計算（核心修改） ======
-       平日：09:00–22:00
-       週六：09:00–21:00
-       週日：09:30–21:00
-       各班別時間依當天營業時間自動裁切；統計時用實際小時（含 0.5） */
+    /* ====== 營業時間與班別計算（平日/六/日） ====== */
     const toMin = (h, m=0) => h*60 + m;
-    const fmtHM = (min) => {
-      const h = Math.floor(min/60), m = min%60;
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-    };
+    const fmtHM = (min) => `${String(Math.floor(min/60)).padStart(2,'0')}:${String(min%60).padStart(2,'0')}`;
     const fmtHours = (mins) => {
       const h = mins/60;
       return (Math.abs(h - Math.round(h)) < 1e-9) ? `${Math.round(h)}小時` : `${(Math.round(h*2)/2).toFixed(1)}小時`;
     };
-
-    // 回傳當天營業 open/close（分鐘）
     const getBusinessWindow = (date) => {
-      const dow = date.getDay(); // 0=週日
+      const dow = date.getDay(); // 0=日
       if (dow === 0) return { open: toMin(9,30), close: toMin(21,0) }; // 週日
       if (dow === 6) return { open: toMin(9,0),  close: toMin(21,0) }; // 週六
-      return { open: toMin(9,0),  close: toMin(22,0) }; // 週一~週五
+      return { open: toMin(9,0),  close: toMin(22,0) };                  // 週一~週五
     };
-
-    // 給定當天與班別，算出實際 [start,end] 與時數
     const getShiftWindowForDate = (date, shiftText) => {
       const { open, close } = getBusinessWindow(date);
       const cap = (s,e) => {
-        const start = Math.max(open, Math.min(s, close));
-        const end   = Math.max(start, Math.min(e, close));
-        return { start, end };
-      };
-
-      if (!shiftText || shiftText === '休')  return { label:'0 小時', hoursMin:0 };
-      if (shiftText === '請假')              return { label:'0 小時', hoursMin:0 };
-      if (shiftText === '支援樹林')          return { label:'', hoursMin:0 };
-
-      // 基礎班別目標時間（未裁切）
-      let target;
-      switch (shiftText) {
-        case '早班':       target = { start: open,        end: open + toMin(4) }; break;
-        case '早+午班':    target = { start: open,        end: toMin(17,0)     }; break;
-        case '午班':       target = { start: toMin(13,0), end: toMin(17,0)     }; break;
-        case '午+晚班':    target = { start: toMin(13,0), end: close           }; break;
-        case '晚班':       target = { start: toMin(16,0), end: close           }; break;
-        default:           target = { start: open,        end: open            }; break;
-      }
-
-      const { start, end } = cap(target.start, target.end);
-      const minutes = Math.max(0, end - start);
-      const label = minutes > 0 ? `${fmtHM(start)} - ${fmtHM(end)} (${fmtHours(minutes)})` : '0 小時';
-      return { label, hoursMin: minutes };
-    };
-
-    // 供表格每一格顯示（根據當天）
-    const getFullShiftDisplay = (shift, date) => {
-      const shiftText = (typeof shift === 'object' && shift) ? '請假' : (shift || '');
-      if (!shiftText) return '';
-      if (shiftText === '請假' && typeof shift === 'object') return '請假';
-      const { label } = getShiftWindowForDate(date, shiftText);
-      return (<><div className="font-bold">{shiftText}</div><div className="text-xs">{label}</div></>);
-    };
-
-    // 給「班別對應時間」說明卡使用（平日/六/日）
-    const buildLegendRows = (open, close) => {
-      const rows = [];
-      const dummy = new Date(2025,0,1); // 任意
-      const win = { open, close };
-      const withWin = (shift) => {
-        const date = new Date(dummy); // 用 cap 函數但改寫 open/close
-        const {label, hoursMin} = (()=> {
-          // 暫時覆寫 getBusinessWindow 邏輯
-          const cap = (s,e) => {
-            const start = Math.max(win.open, Math.min(s, win.close));
-            const end   = Math.max(start, Math.min(e, win.close));
-            return { start, end };
-          };
-          let target;
-          switch (shift) {
-            case '早班':       target = { start: win.open,          end: win.open + toMin(4) }; break;
-            case '早+午班':    target = { start: win.open,          end: toMin(17,0)         }; break;
-            case '午班':       target = { start: toMin(13,0),       end: toMin(17,0)         }; break;
-            case '午+晚班':    target = { start: toMin(13,0),       end: win.close           }; break;
-            case '晚班':       target = { start: toMin(16,0),       end: win.close           }; break;
-            default:           target = { start: win.open,          end: win.open            }; break;
-          }
-          const { start, end } = cap(target.start, target.end);
-          const mins = Math.max(0, end - start);
-          const lab = mins>0 ? `${fmtHM(start)} - ${fmtHM(end)} (${fmtHours(mins)})` : '0 小時';
-          return {label:lab, hoursMin:mins};
-        })();
-        return label;
-      };
-      ['早班','早+午班','午班','午+晚班','晚班'].forEach(s=>{
-        rows.push([s, withWin(s)]);
-      });
-      rows.push(['休','0 小時']);
-      rows.push(['請假','0 小時']);
-      rows.push(['支援樹林','（依實際安排）']);
-      return rows;
-    };
-
-    /* ====== 小工具 ====== */
-    const debounce = (fn, delay=500)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay);} };
-    const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
-    const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
-
-    /* ====== App ====== */
-    function App(){
-      const [db,setDb] = useState(null);
-      const [auth,setAuth] = useState(null);
-      const [user,setUser] = useState(null);
-
-      const [currentDate,setCurrentDate] = useState(new Date());
-      const [staffs,setStaffs] = useState([]);
-      const [schedule,setSchedule] = useState([]);
-      const [newStaffName,setNewStaffName] = useState('');
-      const [showDeleteModal,setShowDeleteModal] = useState(false);
-      const [staffToDelete,setStaffToDelete] = useState(null);
-      const [statusMessage,setStatusMessage] = useState('');
-      const [error,setError] = useState('');
-      const [email,setEmail] = useState(localStorage.getItem('rememberedEmail')||'');
-      const [password,setPassword] = useState('');
-      const [rememberEmail,setRememberEmail] = useState(!!localStorage.getItem('rememberedEmail'));
-
-      // Firebase 初始化 + Auth 監聽
-      useEffect(()=>{
-        try{
-          const app = initializeApp(firebaseConfig);
-          const _db = getFirestore(app);
-          const _auth = getAuth(app);
-          setDb(_db); setAuth(_auth);
-          const unsub = onAuthStateChanged(_auth, cur=> setUser(cur||null));
-          if (initialAuthToken) {
-            signInWithCustomToken(_auth, initialAuthToken).catch(e=>console.error('custom token 登入失敗', e));
-          }
-          return ()=>unsub && unsub();
-        }catch(e){ console.error('Firebase 初始化錯誤：', e); }
-      },[]);
-
-      // Firestore 即時同步（共用工作區）
-      useEffect(()=>{
-        if(!db || !user) return;
-        const y = currentDate.getFullYear();
-        const m = currentDate.getMonth()+1;
-        const monthId = `${y}-${String(m).padStart(2,'0')}`;
-        const staffRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-        const schedRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-
-        const unsubStaff = onSnapshot(staffRef, s=> setStaffs(s.exists() ? (s.data().names||[]) : []),
-          err=>{ console.error('讀取員工清單失敗：', err); setStatusMessage(`讀取員工清單失敗：${err.code||err.message}`); });
-
-        const unsubSched = onSnapshot(schedRef, s=>{
-          if(s.exists() && s.data().schedule){
-            try{ setSchedule(JSON.parse(s.data().schedule)); }
-            catch(e){ console.error('班表解析失敗', e); setSchedule([]); }
-          }else setSchedule([]);
-        }, err=>{ console.error('讀取班表失敗：', err); setStatusMessage(`讀取班表失敗：${err.code||err.message}`); });
-
-        return ()=>{ unsubStaff(); unsubSched(); };
-      },[db,user,currentDate]);
-
-      // 儲存
-      const sanitizeSchedule = (data)=> Array.isArray(data)
-        ? data.map(day=> Array.isArray(day)? day.map(s=> s===undefined?'':s) : [])
-        : [];
-      const saveScheduleNow = async (data)=>{
-        if(!db || !user) return;
-        try{
-          const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${String(m).padStart(2,'0')}`;
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          await setDoc(ref, { schedule: JSON.stringify(sanitizeSchedule(data)), lastUpdated: new Date() }, { merge:true });
-          setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''), 1600);
-        }catch(e){
-          console.error('儲存班表失敗：', e);
-          setStatusMessage(`儲存班表失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
-        }
-      };
-      const saveScheduleDebounced = useMemo(()=> debounce(saveScheduleNow, 500), [db,user,currentDate,WORKSPACE_ID]);
-      const manualSave = ()=> saveScheduleNow(schedule);
-
-      // 互動
-      const handleShiftChange = (dayIdx, staffIdx)=>{
-        const next=[...schedule];
-        next[dayIdx] = next[dayIdx] || Array(staffs.length).fill('');
-        const cur = next[dayIdx][staffIdx] || '';
-        const curText = (typeof cur==='object') ? '請假' : cur;
-        const i = SHIFT_OPTIONS.indexOf(curText);
-        const ni = (i+1) % SHIFT_OPTIONS.length;
-        const ns = SHIFT_OPTIONS[ni];
-        next[dayIdx][staffIdx] = (ns==='請假')? {shift:'請假', type:'未備註', days:1, notes:''} : ns;
-        setSchedule(next);
-        saveScheduleDebounced(next);
-      };
-
-      const handleAddStaff = async ()=>{
-        if(!newStaffName.trim()) return;
-        if(staffs.includes(newStaffName.trim())){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1600); return; }
-        const nextStaffs=[...staffs, newStaffName.trim()];
-        setStaffs(nextStaffs);
-        setSchedule(schedule.map(day=> [...day, '']));
-        setNewStaffName('');
-        if(!db || !user) return;
-        try{
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-          await setDoc(ref, { names: nextStaffs }, { merge:true });
-          setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ console.error(e); setStatusMessage(`新增員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000); }
-      };
-
-      const [confirmOpen,setConfirmOpen] = useState(false);
-      const [staffToDel,setStaffToDel] = useState(null);
-      const handleDeleteStaff = (name)=>{ setStaffToDel(name); setConfirmOpen(true); };
-      const confirmDeleteStaff = async ()=>{
-        const idx = staffs.indexOf(staffToDel);
-        const nextStaffs = staffs.filter(n=> n!==staffToDel);
-        const nextSched  = schedule.map(day=> day.filter((_,i)=> i!==idx));
-        setStaffs(nextStaffs);
-        setSchedule(nextSched);
-        try{
-          if(db && user){
-            const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-            await setDoc(ref, { names: nextStaffs }, { merge:true });
-            await saveScheduleNow(nextSched);
-          }
-          setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{
-          setConfirmOpen(false); setStaffToDel(null);
-        }
-      };
-
-      // 統計（依當天實際時段計）
-      const stats = useMemo(()=>{
-        const result = staffs.reduce((acc,n)=>(acc[n]={totalDays:0,totalHours:0,leaveDays:0}, acc), {});
-        const y = currentDate.getFullYear(), m = currentDate.getMonth();
-        (schedule||[]).forEach((dayRow, dIdx)=>{
-          if(!Array.isArray(dayRow)) return;
-          const date = new Date(y, m, dIdx+1);
-          dayRow.forEach((shift, i)=>{
-            const name = staffs[i]; if(!name) return;
-            const text = (typeof shift==='object' && shift)? '請假' : (shift||'');
-            if (text==='請假'){
-              // 請假以 1 天累計
-              result[name].leaveDays += 1;
-              return;
-            }
-            const { hoursMin } = getShiftWindowForDate(date, text);
-            if (hoursMin>0){
-              result[name].totalDays += 1;
-              result[name].totalHours += hoursMin/60;
-            }
-          });
-        });
-        // 四捨五入到 0.5
-        for(const n in result){
-          result[n].totalHours = Math.round(result[n].totalHours*2)/2;
-        }
-        return result;
-      }, [schedule, staffs, currentDate]);
-
-      // Auth handlers
-      const doRegister = async ()=>{
-        setError('');
-        if(password.length<6){ setError('密碼長度必須至少為6個字元'); return; }
-        try{
-          await createUserWithEmailAndPassword(auth, email, password);
-          rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
-          setStatusMessage('註冊成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
-      const doLogin = async ()=>{
-        setError('');
-        try{
-          await signInWithEmailAndPassword(auth, email, password);
-          rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
-          setStatusMessage('登入成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
-      const doLogout = async ()=>{
-        setError('');
-        try{ await signOut(auth); setStatusMessage('登出成功！'); setTimeout(()=>setStatusMessage(''),1600); }
-        catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
-
-      /* 未登入畫面 */
-      if(!user){
-        return (
-          <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-            <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-              <h1 className="text-3xl font-bold text-center text-gray-900">排班系統登入</h1>
-              {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
-                       className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">密碼</label>
-                <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
-                       className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" className="h-4 w-4 text-blue-600 rounded"
-                       checked={rememberEmail} onChange={e=>setRememberEmail(e.target.checked)}/>
-                記住我的電子郵件
-              </label>
-              <div className="flex flex-col gap-2">
-                <button onClick={doLogin} className="w-full py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600">登入</button>
-                <button onClick={doRegister} className="w-full py-2 px-4 bg-green-500 text-white rounded-lg hover:bg-green-600">註冊</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      /* 已登入畫面 */
-      const daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
-      const weekdayLegend   = buildLegendRows(toMin(9,0),  toMin(22,0));
-      const saturdayLegend  = buildLegendRows(toMin(9,0),  toMin(21,0));
-      const sundayLegend    = buildLegendRows(toMin(9,30), toMin(21,0));
-
-      return (
-        <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800 antialiased">
-          <header className="mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h1 className="text-4xl font-bold text-gray-900">排班系統</h1>
-              <button onClick={doLogout} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
-            </div>
-            <p className="text-gray-600">目前登入信箱: {user.email || '（未提供）'}｜工作區：<span className="font-semibold">{WORKSPACE_ID}</span></p>
-          </header>
-
-          {statusMessage && (
-            <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-6 py-2 rounded-full shadow-lg z-50">
-              {statusMessage}
-            </div>
-          )}
-
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="flex gap-2 w-full md:w-auto">
-                <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()-1, 1))} className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">上一月</button>
-                <select
-                  value={`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`}
-                  onChange={(e)=>{ const [y,m]=e.target.value.split('-'); setCurrentDate(new Date(+y, +m-1, 1)); }}
-                  className="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-full md:w-auto"
-                >
-                  {Array.from({length:25},(_,i)=>i-12).map(off=>{
-                    const d=new Date(); d.setMonth(d.getMonth()+off);
-                    const v=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-                    return <option key={v} value={v}>{d.getFullYear()}年{d.getMonth()+1}月</option>;
-                  })}
-                </select>
-                <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()+1, 1))} className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">下一月</button>
-              </div>
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <input type="text" value={newStaffName} onChange={e=>setNewStaffName(e.target.value)}
-                       placeholder="新增員工姓名"
-                       className="border rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-green-500"/>
-                <button onClick={handleAddStaff} className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
-                <button onClick={manualSave} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
-              </div>
-            </div>
-
-            {/* 班別對應時間（依營業日類型顯示） */}
-            <div className="mt-6 border-t pt-4">
-              <h2 className="text-xl font-semibold mb-4">班別對應時間（依營業時間）</h2>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-sm">
-                <div className="p-3 bg-gray-50 rounded-lg border">
-                  <div className="font-bold mb-2">週一～週五（09:00–22:00）</div>
-                  {weekdayLegend.map(([s, t])=>(
-                    <div key={`wd-${s}`} className="flex justify-between"><span className="font-semibold">{s}</span><span>{t}</span></div>
-                  ))}
-                </div>
-                <div className="p-3 bg-gray-50 rounded-lg border">
-                  <div className="font-bold mb-2">週六（09:00–21:00）</div>
-                  {saturdayLegend.map(([s, t])=>(
-                    <div key={`sat-${s}`} className="flex justify-between"><span className="font-semibold">{s}</span><span>{t}</span></div>
-                  ))}
-                </div>
-                <div className="p-3 bg-gray-50 rounded-lg border">
-                  <div className="font-bold mb-2">週日（09:30–21:00）</div>
-                  {sundayLegend.map(([s, t])=>(
-                    <div key={`sun-${s}`} className="flex justify-between"><span className="font-semibold">{s}</span><span>{t}</span></div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="text-center my-6 text-blue-600 font-medium">點格子循環：早班 ⭢ 早+午班 ⭢ 午班 ⭢ 午+晚班 ⭢ 晚班 ⭢ 休 ⭢ 支援樹林 ⭢ 請假</div>
-
-          <div className="overflow-x-auto scrollbar-hide">
-            <div className="min-w-max bg-white rounded-xl shadow-lg overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-gray-200 sticky top-0 z-10">
-                  <tr>
-                    <th className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">日期</th>
-                    {staffs.map((name, idx)=>(
-                      <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
-                        <div className="flex justify-between items-center">
-                          <span>{name}</span>
-                          <button onClick={()=>{ setStaffToDel(name); setConfirmOpen(true); }}
-                                  className="text-red-500 hover:text-red-700" title="刪除">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
-                            </svg>
-                          </button>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({length: daysInMonth}).map((_, dayIdx)=>{
-                    const day = dayIdx + 1;
-                    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    return (
-                      <tr key={dayIdx} className="border-t">
-                        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
-                          {currentDate.getMonth()+1}月{day}號（{dowName}）
-                        </td>
-                        {staffs.map((_, staffIdx)=>{
-                          const cur = schedule[dayIdx]?.[staffIdx] || '';
-                          const cls = SHIFT_COLOR[(typeof cur==='object')?'請假':cur] || 'bg-white text-gray-500';
-                          return (
-                            <td key={staffIdx} className="px-2 py-2 border-r-2 border-gray-300 text-center">
-                              <div onClick={()=>handleShiftChange(dayIdx, staffIdx)}
-                                   className={`p-2 rounded-lg cursor-pointer hover:shadow-md transition ${cls}`}>
-                                {getFullShiftDisplay(cur, date)}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="bg-gray-200 sticky bottom-0 z-10">
-                  <tr>
-                    <td className="px-4 py-3 border-r-2 border-gray-300 font-bold whitespace-nowrap">總計</td>
-                    {staffs.map((name, idx)=>(
-                      <td key={idx} className="px-4 py-3 border-r-2 border-gray-300 text-sm whitespace-nowrap">
-                        <div>
-                          <p>總天數: {stats[name]?.totalDays || 0}</p>
-                          <p>總時數: {stats[name]?.totalHours || 0} 小時</p>
-                          <p>請假天數: {stats[name]?.leaveDays || 0}</p>
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-
-          {confirmOpen && (
-            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-lg p-6 shadow-xl max-w-sm w-full text-center">
-                <h3 className="text-lg font-bold mb-4">確認刪除</h3>
-                <p className="mb-6">是否確認刪除員工 <span className="font-semibold text-red-600">"{staffToDel}"</span>？此操作無法復原。</p>
-                <div className="flex justify-center gap-3">
-                  <button onClick={()=>{ setConfirmOpen(false); setStaffToDel(null); }} className="px-4 py-2 bg-gray-200 rounded-lg">取消</button>
-                  <button onClick={confirmDeleteStaff} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    ReactDOM.render(<App/>, document.getElementById('root'));
-  </script>
-</body>
-</html>
+        const start = Math.max(open, Math.min
