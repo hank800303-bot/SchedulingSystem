@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8">
+<title>Firebase Health Check</title>
+<div id="out" style="font:14px/1.6 system-ui;padding:16px;white-space:pre-wrap"></div>
+<script type="module">
+  const out = (...a)=>document.getElementById('out').append(a.join(' ')+'\n');
+  try {
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js');
+    const { getAuth, onAuthStateChanged, signInWithEmailAndPassword } =
+      await import('https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js');
+    const { getFirestore, doc, getDoc } =
+      await import('https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js');
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
+      authDomain: "zhenan-scheduler.firebaseapp.com",
+      projectId: "zhenan-scheduler",
+      storageBucket: "zhenan-scheduler.firebasestorage.app",
+      messagingSenderId: "217165082111",
+      appId: "1:217165082111:web:549c98dd09589029918bca"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    out('App 初始化 OK');
+
+    const auth = getAuth(app);
+    onAuthStateChanged(auth, (u)=> out('Auth 狀態：', u ? ('已登入 '+(u.email||u.uid)) : '未登入'));
+
+    const db = getFirestore(app);
+    const testRef = doc(db, 'artifacts/zhenan-scheduler/workspaces/main/staffs/staffList');
+    const snap = await getDoc(testRef);
+    out('Firestore 讀取：', snap.exists() ? 'OK（讀到資料）' : 'OK（文件不存在）');
+
+  } catch (e) {
+    out('錯誤：', e.message || e);
+    console.error(e);
+  }
+</script>
