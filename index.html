@@ -19,7 +19,7 @@
     import {
       getFirestore, doc, setDoc, onSnapshot,
       collection, addDoc, serverTimestamp,
-      query, where, orderBy, limit, getDocs
+      query, where, orderBy, limit, getDocs, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
     // 暴露到全域，讓 Babel 腳本能使用
@@ -27,7 +27,7 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
-      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
+      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, getDoc
     };
   </script>
 
@@ -48,7 +48,7 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
-      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
+      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, getDoc
     } = window.firebase;
 
     /* ====== 常數 ====== */
@@ -68,7 +68,7 @@
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
-    // 你的 Firebase 設定（不含 analytics）
+    // 你的 Firebase 設定
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
       authDomain: "zhenan-scheduler.firebaseapp.com",
@@ -99,7 +99,7 @@
         return { start, end };
       };
       if (!shiftText || shiftText==='休' || shiftText==='請假') return { label:'0 小時', hoursMin:0 };
-      if (shiftText === '支援樹林') return { label:'', hoursMin:0 }; // 不計時數（但月曆顯示）
+      if (shiftText === '支援樹林') return { label:'', hoursMin:0 }; // 不計時數
       let target;
       switch (shiftText) {
         case '早班':    target={start:open,        end:open+toMin(4)}; break;
@@ -147,7 +147,14 @@
       const [confirmOpen,setConfirmOpen] = useState(false);
       const [staffToDel,setStaffToDel] = useState(null);
 
+      // 打卡/成員
       const [myTodayLogs,setMyTodayLogs] = useState([]);
+      const [myName, setMyName] = useState('');
+      const [savingName, setSavingName] = useState(false);
+      const [members, setMembers] = useState([]);     // {uid, displayName, email}
+      const [logDate, setLogDate] = useState(ymd(new Date()));
+      const [logUid, setLogUid] = useState('ALL');
+      const [logs, setLogs] = useState([]);
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -181,6 +188,54 @@
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
 
+      // 讀我的姓名 + 建立基礎 member 檔
+      useEffect(() => {
+        (async () => {
+          if (!db || !user) return;
+          try {
+            const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+            const snap = await getDoc(ref);
+            if (snap.exists()) {
+              const d = snap.data();
+              setMyName(d.displayName || '');
+            } else {
+              await setDoc(ref, { email: user.email || '', displayName: '', updatedAt: new Date() }, { merge: true });
+            }
+          } catch (e) {
+            console.warn('讀取我的姓名失敗：', e);
+          }
+        })();
+      }, [db, user]);
+
+      const saveMyName = async () => {
+        if (!db || !user) return;
+        setSavingName(true);
+        try {
+          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+          await setDoc(ref, { displayName: myName || '', email: user.email || '', updatedAt: new Date() }, { merge: true });
+          setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''), 1200);
+        } catch (e) {
+          console.error('儲存姓名失敗：', e);
+          setStatusMessage(`儲存姓名失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
+        } finally {
+          setSavingName(false);
+        }
+      };
+
+      // 讀取 members（供查詢下拉用）
+      useEffect(() => {
+        (async ()=>{
+          if (!db || !user) return;
+          try {
+            const col = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members`);
+            const snap = await getDocs(col);
+            setMembers(snap.docs.map(d => ({ uid: d.id, ...d.data() })));
+          } catch (e) {
+            console.warn('讀取 members 失敗：', e);
+          }
+        })();
+      }, [db, user]);
+
       // 今日我的打卡（顯示用）
       useEffect(()=>{
         (async ()=>{
@@ -188,10 +243,13 @@
           const todayKey = ymd(new Date());
           try{
             const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${todayKey}/logs`);
-            const q = query(logsRef, where('uid','==', user.uid), orderBy('ts','desc'), limit(2));
-            const snap = await getDocs(q);
-            setMyTodayLogs(snap.docs.map(d=> ({ id:d.id, ...d.data() })));
-          }catch(e){ console.error('讀取打卡失敗：', e); setMyTodayLogs([]); }
+            const qy = query(logsRef, orderBy('ts','desc'), limit(10));
+            const snap = await getDocs(qy);
+            const list = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+                                  .filter(x => x.uid === user.uid)
+                                  .slice(0, 2);
+            setMyTodayLogs(list);
+          }catch(e){ console.warn('讀取打卡失敗：', e); setMyTodayLogs([]); }
         })();
       },[db,user]);
 
@@ -258,28 +316,61 @@
           }
           setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
         }catch(e){ console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{ setConfirmOpen(false); setStaffToDel(null); } // 自動關閉
+        }finally{ setConfirmOpen(false); setStaffToDel(null); }
       };
 
-      // 打卡（A 版）
-      const punch = async (type)=>{
+      // 打卡（免索引：寫入成功就顯示成功；列表以 orderBy 後前端濾 uid）
+      const punch = async (type) => {
         if (!db || !user) return;
-        try{
-          const dateKey = ymd(new Date());
-          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
+        const dateKey = ymd(new Date());
+        const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
+
+        // 1) 寫入
+        try {
           await addDoc(logsRef, {
-            uid: user.uid, email: user.email || '', type,
-            ts: serverTimestamp(), by: 'web', meta: { ua: navigator.userAgent || '' }
+            uid: user.uid, email: user.email || '', displayName: myName || '',
+            type, ts: serverTimestamp(), by: 'web', meta: { ua: navigator.userAgent || '' }
           });
-          setStatusMessage(type==='IN' ? '上班打卡成功！' : '下班打卡成功！');
-          setTimeout(()=>setStatusMessage(''), 1600);
-          const q = query(logsRef, where('uid','==', user.uid), orderBy('ts','desc'), limit(2));
-          const snap = await getDocs(q);
-          setMyTodayLogs(snap.docs.map(d=> ({ id:d.id, ...d.data() })));
-        }catch(e){ console.error('打卡失敗：', e); setStatusMessage(`打卡失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000); }
+          setStatusMessage(type === 'IN' ? '上班打卡成功！' : '下班打卡成功！');
+          setTimeout(() => setStatusMessage(''), 1600);
+        } catch (e) {
+          console.error('打卡寫入失敗：', e);
+          setStatusMessage(`打卡失敗：${e.code || e.message}`);
+          setTimeout(() => setStatusMessage(''), 2000);
+          return;
+        }
+
+        // 2) 更新「今日我的打卡」顯示
+        try {
+          const qy = query(logsRef, orderBy('ts','desc'), limit(10));
+          const snap = await getDocs(qy);
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                                .filter(x => x.uid === user.uid)
+                                .slice(0, 2);
+          setMyTodayLogs(list);
+        } catch (e) {
+          console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
+        }
       };
 
-      // 匯出月份行事曆（只列出上班的人與班別，無時間；無內嵌 <script>）
+      // 查詢打卡紀錄（管理者/一般人）
+      const runLogSearch = async () => {
+        if (!db || !user || !logDate) return;
+        try {
+          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${logDate}/logs`);
+          const qy = query(logsRef, orderBy('ts','desc'), limit(500));
+          const snap = await getDocs(qy);
+          let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          if (logUid !== 'ALL') list = list.filter(x => x.uid === logUid);
+          setLogs(list);
+          setStatusMessage(`已載入 ${list.length} 筆打卡`); setTimeout(()=>setStatusMessage(''), 1200);
+        } catch (e) {
+          console.error('查詢打卡失敗：', e);
+          setStatusMessage(`查詢打卡失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
+        }
+      };
+
+      // 匯出月份行事曆（只顯示 姓名：班別）
       const exportMonthlyCalendar = ()=>{
         const y = currentDate.getFullYear();
         const m = currentDate.getMonth();
@@ -450,6 +541,23 @@
             </div>
           )}
 
+          {/* 我的資料（姓名） */}
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-sm text-gray-600 mb-1">我的姓名（會出現在打卡與報表）</label>
+                <input className="w-full border rounded px-3 py-2"
+                       value={myName} onChange={e=>setMyName(e.target.value)} placeholder="例如：王小明"/>
+              </div>
+              <button onClick={saveMyName}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-60"
+                      disabled={savingName}>
+                {savingName ? '儲存中…' : '儲存姓名'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">＊ 每位員工設定一次即可；打卡會將此姓名寫入紀錄。</p>
+          </div>
+
           {/* 打卡區塊 */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -463,6 +571,60 @@
             </div>
           </div>
 
+          {/* 打卡紀錄查詢 */}
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div className="flex flex-col md:flex-row md:items-end gap-3">
+              <div>
+                <label className="text-sm text-gray-600">日期</label>
+                <input type="date" className="block border rounded px-3 py-2"
+                       value={logDate} onChange={e=>setLogDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600">成員</label>
+                <select className="block border rounded px-3 py-2"
+                        value={logUid} onChange={e=>setLogUid(e.target.value)}>
+                  <option value="ALL">全部</option>
+                  {members.map(m => (
+                    <option key={m.uid} value={m.uid}>
+                      {m.displayName || m.email || m.uid}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button onClick={runLogSearch}
+                      className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700">
+                查詢打卡紀錄
+              </button>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="px-3 py-2 text-left">時間</th>
+                    <th className="px-3 py-2 text-left">姓名</th>
+                    <th className="px-3 py-2 text-left">帳號</th>
+                    <th className="px-3 py-2 text-left">類型</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map(r => (
+                    <tr key={r.id} className="border-t">
+                      <td className="px-3 py-2">{r.ts?.toDate ? r.ts.toDate().toLocaleString() : '—'}</td>
+                      <td className="px-3 py-2">{r.displayName || '未設定'}</td>
+                      <td className="px-3 py-2">{r.email || r.uid}</td>
+                      <td className="px-3 py-2">{r.type === 'IN' ? '上班' : '下班'}</td>
+                    </tr>
+                  ))}
+                  {!logs.length && (
+                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（目前沒有資料）</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 排班功能 */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex flex-col md:flex-row items-center justify-between gap-3">
               <div className="flex gap-2 w-full md:w-auto">
@@ -497,7 +659,7 @@
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格內顯示當日裁切後時段；月曆匯出僅顯示「姓名：班別」）</div>
+                <div className="text-gray-500">（表格顯示當日裁切後時段；月曆匯出僅顯示「姓名：班別」）</div>
               </div>
             </div>
           </div>
