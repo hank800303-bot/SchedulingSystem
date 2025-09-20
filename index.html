@@ -273,10 +273,11 @@
       };
 
       // 打卡（A 版）
+      const ymdStr = (d)=> d.toISOString().slice(0,10);
       const punch = async (type)=>{
         if (!db || !user) return;
         try{
-          const dateKey = ymd(new Date());
+          const dateKey = ymdStr(new Date());
           const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
           await addDoc(logsRef, {
             uid: user.uid, email: user.email || '', type,
@@ -302,15 +303,13 @@
         const m = currentDate.getMonth();
         const days = getDaysInMonth(y,m);
         const startDow = new Date(y,m,1).getDay(); // 0=日
-        // 建立每一天要顯示的「姓名：班別」清單（排除 休/請假/空白）
         const dayItems = Array.from({length:days}, (_,i)=>{
-          const date = new Date(y,m,i+1);
           const row = schedule[i] || [];
           const items = [];
           staffs.forEach((name, idx)=>{
             const raw = row[idx] || '';
             const text = (typeof raw==='object' && raw)? '請假' : (raw || '');
-            if (!text || text==='休' || text==='請假') return; // 只要上班的人
+            if (!text || text==='休' || text==='請假') return;
             items.push(`${name}：${text}`);
           });
           return items;
@@ -467,7 +466,7 @@
             </div>
           )}
 
-          <!-- 打卡區塊 -->
+          {/* 打卡區塊 */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex gap-2">
@@ -509,13 +508,13 @@
               </div>
             </div>
 
-            <!-- 班別對應時間（摘要） -->
+            {/* 班別對應時間（摘要） */}
             <div className="mt-6 border-t pt-4 text-sm text-gray-700">
               <div className="flex flex-wrap gap-4">
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格內仍顯示實際當日裁切後的時間與時數；月曆匯出僅顯示「姓名：班別」）</div>
+                <div className="text-gray-500">（表格內顯示實際當日裁切後時段；月曆匯出僅顯示「姓名：班別」）</div>
               </div>
             </div>
           </div>
