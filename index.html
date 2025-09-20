@@ -14,7 +14,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
     import {
       getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
-      signInWithEmailAndPassword, signOut, signInWithCustomToken
+      signInWithEmailAndPassword, signOut
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
     import {
       getFirestore, doc, setDoc, onSnapshot,
@@ -22,9 +22,10 @@
       query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
+    // 暴露到全域，讓 Babel 腳本能使用
     window.firebase = {
       initializeApp, getAuth, onAuthStateChanged,
-      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, signInWithCustomToken,
+      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
       collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
     };
@@ -45,7 +46,7 @@
 
     const {
       initializeApp, getAuth, onAuthStateChanged,
-      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, signInWithCustomToken,
+      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
       collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs
     } = window.firebase;
@@ -67,7 +68,7 @@
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = localStorage.getItem('workspaceId') || 'main';
 
-    // Firebase 設定（不使用 analytics）
+    // 你的 Firebase 設定（不含 analytics）
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
       authDomain: "zhenan-scheduler.firebaseapp.com",
@@ -76,7 +77,6 @@
       messagingSenderId: "217165082111",
       appId: "1:217165082111:web:549c98dd09589029918bca"
     };
-    const initialAuthToken = (typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null);
 
     /* ====== 營業時間與班別計算（平日/六/日） ====== */
     const toMin = (h, m=0) => h*60 + m;
@@ -99,7 +99,7 @@
         return { start, end };
       };
       if (!shiftText || shiftText==='休' || shiftText==='請假') return { label:'0 小時', hoursMin:0 };
-      if (shiftText === '支援樹林') return { label:'', hoursMin:0 }; // 不計時數，但視為上班（顯示在月曆）
+      if (shiftText === '支援樹林') return { label:'', hoursMin:0 }; // 不計時數（但月曆顯示）
       let target;
       switch (shiftText) {
         case '早班':    target={start:open,        end:open+toMin(4)}; break;
@@ -159,9 +159,6 @@
           const _auth = getAuth(app);
           setDb(_db); setAuth(_auth);
           const unsub = onAuthStateChanged(_auth, cur=> setUser(cur||null));
-          if (initialAuthToken) {
-            signInWithCustomToken(_auth, initialAuthToken).catch(e=>console.error('custom token 登入失敗', e));
-          }
           return ()=>unsub && unsub();
         }catch(e){ console.error('Firebase 初始化錯誤：', e); }
       },[]);
@@ -192,10 +189,9 @@
       useEffect(()=>{
         (async ()=>{
           if (!db || !user) { setMyTodayLogs([]); return; }
-          const today = new Date();
-          const dateKey = ymd(today);
+          const todayKey = ymd(new Date());
           try{
-            const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
+            const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${todayKey}/logs`);
             const q = query(logsRef, where('uid','==', user.uid), orderBy('ts','desc'), limit(2));
             const snap = await getDocs(q);
             setMyTodayLogs(snap.docs.map(d=> ({ id:d.id, ...d.data() })));
@@ -269,15 +265,14 @@
           }
           setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
         }catch(e){ console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{ setConfirmOpen(false); setStaffToDel(null); }
+        }finally{ setConfirmOpen(false); setStaffToDel(null); } // 自動關閉
       };
 
-      // 打卡（A 版）
-      const ymdStr = (d)=> d.toISOString().slice(0,10);
+      // 打卡（A 版：serverTimestamp）
       const punch = async (type)=>{
         if (!db || !user) return;
         try{
-          const dateKey = ymdStr(new Date());
+          const dateKey = ymd(new Date());
           const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
           await addDoc(logsRef, {
             uid: user.uid, email: user.email || '', type,
@@ -286,7 +281,7 @@
           });
           setStatusMessage(type==='IN' ? '上班打卡成功！' : '下班打卡成功！');
           setTimeout(()=>setStatusMessage(''), 1600);
-          // 重新抓取今日我的打卡
+          // 更新顯示
           const q = query(logsRef, where('uid','==', user.uid), orderBy('ts','desc'), limit(2));
           const snap = await getDocs(q);
           setMyTodayLogs(snap.docs.map(d=> ({ id:d.id, ...d.data() })));
@@ -297,12 +292,14 @@
         }
       };
 
-      // 匯出月份行事曆（只列出上班的人與班別）
+      // 匯出月份行事曆（只列出上班的人與班別，無時間；避免 </script> 斷裂）
       const exportMonthlyCalendar = ()=>{
         const y = currentDate.getFullYear();
         const m = currentDate.getMonth();
         const days = getDaysInMonth(y,m);
         const startDow = new Date(y,m,1).getDay(); // 0=日
+
+        // 每天的「姓名：班別」（排除 休/請假/空白）
         const dayItems = Array.from({length:days}, (_,i)=>{
           const row = schedule[i] || [];
           const items = [];
@@ -327,19 +324,14 @@
   th { background:#f4f6f8; text-align:center; }
   .date { font-weight:700; margin-bottom:6px; }
   .empty { background:#fafafa; }
-  @media print {
-    @page { size: A4 landscape; margin: 12mm; }
-  }
+  @media print { @page { size: A4 landscape; margin: 12mm; } }
 </style></head><body>
 <h1>${title}</h1>
 <table>
-  <thead>
-    <tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr>
-  </thead>
+  <thead><tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead>
   <tbody>
     ${(()=>{
-      let html='';
-      let d=1;
+      let html=''; let d=1;
       const cells = startDow + days;
       const rows = Math.ceil(cells/7);
       for(let r=0; r<rows; r++){
@@ -368,10 +360,17 @@
     })()}
   </tbody>
 </table>
-<script>window.onload = () => window.print && window.print();</script>
 </body></html>`;
         const w = window.open('', '_blank');
         w.document.open(); w.document.write(html); w.document.close();
+        // 等載入完成再列印
+        const tryPrint = ()=>{
+          if (!w || w.closed) return;
+          if (w.document && w.document.readyState === 'complete') {
+            try { w.focus(); w.print(); } catch(e) {}
+          } else { setTimeout(tryPrint, 200); }
+        };
+        tryPrint();
       };
 
       /* 登入/註冊/登出 */
