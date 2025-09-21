@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>排班系統</title>
+  <title>排班系統（月份行事曆）</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
     .scrollbar-hide { -ms-overflow-style:none; scrollbar-width:none; }
   </style>
 </head>
-<body>
+<body class="bg-gray-100">
   <div id="root"></div>
 
   <script type="text/babel">
@@ -51,20 +51,8 @@
       collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, getDoc
     } = window.firebase;
 
-    // 常數
-    const SHIFT_OPTIONS = ['早班','早+午班','午班','午+晚班','晚班','休','支援樹林','請假'];
-    const SHIFT_COLOR = {
-      '早班':'bg-blue-200 text-blue-800',
-      '早+午班':'bg-indigo-200 text-indigo-800',
-      '午班':'bg-teal-200 text-teal-800',
-      '午+晚班':'bg-purple-200 text-purple-800',
-      '晚班':'bg-red-200 text-red-800',
-      '休':'bg-gray-400 text-gray-900',
-      '請假':'bg-red-400 text-red-900',
-      '支援樹林':'bg-lime-200 text-lime-800',
-    };
-
-    // 共用工作區（規格一）
+    // ===== 版本與常數 =====
+    const CODE_VERSION = 'v2025.09.22-cal-2';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -78,7 +66,20 @@
       appId: "1:217165082111:web:549c98dd09589029918bca"
     };
 
-    // 小工具
+    const SHIFT_OPTIONS = ['早班','早+午班','午班','午+晚班','晚班','休','支援樹林','請假'];
+    const SHIFT_COLOR = {
+      '早班':'bg-blue-200 text-blue-800',
+      '早+午班':'bg-indigo-200 text-indigo-800',
+      '午班':'bg-teal-200 text-teal-800',
+      '午+晚班':'bg-purple-200 text-purple-800',
+      '晚班':'bg-red-200 text-red-800',
+      '休':'bg-gray-300 text-gray-800',
+      '請假':'bg-rose-200 text-rose-800',
+      '支援樹林':'bg-lime-200 text-lime-800',
+      '': 'bg-white text-gray-500'
+    };
+
+    // ===== 小工具 =====
     const toMin = (h, m=0) => h*60 + m;
     const fmtHM = (min) => `${String(Math.floor(min/60)).padStart(2,'0')}:${String(min%60).padStart(2,'0')}`;
     const fmtHours = (mins) => {
@@ -90,7 +91,6 @@
     const ymdLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     const debounce = (fn, delay=500)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay);} };
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
-    const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
 
     // 營業時間（週一~五 09-22、週六 09-21、週日 09:30-21）
     const getBusinessWindow = (date) => {
@@ -124,19 +124,9 @@
       return { label, hoursMin: minutes };
     };
 
-    const getShiftText = (shift) => (typeof shift === 'object' && shift) ? '請假' : (shift || '');
-    const getFullShiftDisplay = (shift, date) => {
-      const text = getShiftText(shift);
-      if (!text) return '';
-      if (text==='請假' && typeof shift==='object') return '請假';
-      const { label } = getShiftWindowForDate(date, text);
-      return (<>
-        <div className="font-bold">{text}</div>
-        <div className="text-xs">{label}</div>
-      </>);
-    };
+    const getShiftText = (v) => (typeof v === 'object' && v) ? '請假' : (v || '');
 
-    // React App
+    // ===== App =====
     function App(){
       const [db,setDb] = useState(null);
       const [auth,setAuth] = useState(null);
@@ -161,7 +151,7 @@
       const [savingName, setSavingName] = useState(false);
       const [todayLatestIO, setTodayLatestIO] = useState([]);
 
-      // Firebase 初始化 + Auth
+      // 初始化 Firebase
       useEffect(()=>{
         try{
           const app = initializeApp(firebaseConfig);
@@ -253,7 +243,25 @@
       };
       useEffect(() => { if (db && user) loadTodayLatestIO(); }, [db, user]);
 
-      // handlers
+      // 儲存姓名
+      async function saveMyName() {
+        if (!db || !user) return;
+        setSavingName(true);
+        try {
+          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+          await setDoc(ref, { displayName: myName || '', email: user.email || '', updatedAt: new Date() }, { merge: true });
+          setStatusMessage('姓名已儲存');
+          setTimeout(() => setStatusMessage(''), 1200);
+        } catch (e) {
+          console.error('儲存姓名失敗：', e);
+          setStatusMessage(`儲存姓名失敗：${e.code || e.message}`);
+          setTimeout(() => setStatusMessage(''), 2000);
+        } finally {
+          setSavingName(false);
+        }
+      }
+
+      // 排班資料處理
       const sanitizeSchedule = (data) =>
         Array.isArray(data)
           ? data.map(row => Array.isArray(row) ? row.map(v => (v === undefined ? '' : v)) : [])
@@ -282,7 +290,8 @@
 
       const manualSave = () => saveSchedule(schedule);
 
-      const handleShiftChange = (dayIndex, staffIndex) => {
+      // 點擊切換班別（在日格內、針對某位員工）
+      const cycleShift = (dayIndex, staffIndex) => {
         const next = [...(schedule || [])];
         const cols = staffs.length;
         next[dayIndex] = next[dayIndex] ? [...next[dayIndex]] : Array(cols).fill('');
@@ -299,6 +308,7 @@
         saveSchedule(next);
       };
 
+      // 新增/刪除員工
       const handleAddStaff = async () => {
         const name = (newStaffName || '').trim();
         if (!name) return;
@@ -330,29 +340,33 @@
         }
       };
 
+      const confirmDeleteStaff = async (name) => {
+        const idx = staffs.findIndex(n => n === name);
+        if (idx === -1) return;
+        const nextStaffs = staffs.filter((_, i)=> i !== idx);
+        const nextSched  = (schedule||[]).map(day=> Array.isArray(day) ? day.filter((_,i)=> i!==idx) : []);
+        setStaffs(nextStaffs);
+        setSchedule(nextSched);
+        try{
+          if(db && user){
+            const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+            await setDoc(ref, { names: nextStaffs }, { merge:true });
+            const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1, monthId=`${y}-${String(mo).padStart(2,'0')}`;
+            const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
+            await setDoc(sref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date() }, { merge:true });
+          }
+          setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
+        }catch(e){
+          console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+        } finally {
+          setConfirmOpen(false);
+          setStaffToDel(null);
+        }
+      };
+
       const handleDeleteStaff = (name) => { setStaffToDel(name); setConfirmOpen(true); };
 
-      async function saveMyName() {
-        if (!db || !user) return;
-        setSavingName(true);
-        try {
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-          await setDoc(
-            ref,
-            { displayName: myName || '', email: user.email || '', updatedAt: new Date() },
-            { merge: true }
-          );
-          setStatusMessage('姓名已儲存');
-          setTimeout(() => setStatusMessage(''), 1200);
-        } catch (e) {
-          console.error('儲存姓名失敗：', e);
-          setStatusMessage(`儲存姓名失敗：${e.code || e.message}`);
-          setTimeout(() => setStatusMessage(''), 2000);
-        } finally {
-          setSavingName(false);
-        }
-      }
-
+      // 打卡
       const punch = async (type) => {
         if (!db || !user) return;
         const dateKey = ymdLocal(new Date());
@@ -383,19 +397,18 @@
         }
       };
 
-      // 匯出月份行日曆（週一→週日，每格顯示「月/日」＋上班名單）
-      const buildExportHTML = () => {
+      // 匯出（開新視窗，週一→週日，格內顯示「月/日」與上班名單）
+      const openExportWindow = () => {
         const y = currentDate.getFullYear(), m = currentDate.getMonth();
         const first = new Date(y, m, 1);
         const days = getDaysInMonth(y, m);
-        // 週一為 0
         const firstDowMonStart = (first.getDay() + 6) % 7;
 
         const cells = Array.from({ length: firstDowMonStart }, () => null)
           .concat(Array.from({ length: days }, (_, i) => i + 1));
         while (cells.length % 7 !== 0) cells.push(null);
 
-        const dayCell = (d) => {
+        const buildCell = (d) => {
           if (!d) return '<div class="min-h-[8rem] border rounded p-2 bg-white"></div>';
           const md = `${m+1}/${d}`;
           const items = staffs.map((name, i) => {
@@ -415,11 +428,17 @@
             </div>`;
         };
 
-        const weekHeader = ['一','二','三','四','五','六','日']
-          .map(w => `<div class="font-semibold text-center text-sm text-gray-600">${w}</div>`)
-          .join('');
+        const win = window.open('', '_blank');
+        if (!win) { alert('請允許彈出視窗'); return; }
+        win.document.write('<html><head><meta charset="utf-8"/><title>班表</title></head><body></body></html>');
+        const s = win.document.createElement('script');
+        s.src = 'https://cdn.tailwindcss.com';
+        win.document.head.appendChild(s);
 
-        return `
+        const container = win.document.createElement('div');
+        const weekHeader = ['一','二','三','四','五','六','日']
+          .map(w => `<div class="font-semibold text-center text-sm text-gray-600">${w}</div>`).join('');
+        container.innerHTML = `
           <div class="p-6 bg-gray-50 min-h-screen">
             <div class="flex items-center justify-between mb-4">
               <h1 class="text-2xl font-bold">${y}年${String(m + 1).padStart(2,'0')}月 班表（週一→週日）</h1>
@@ -430,35 +449,19 @@
               </div>
             </div>
             <div class="grid grid-cols-7 gap-2">${weekHeader}</div>
-            <div class="grid grid-cols-7 gap-2 mt-2">${cells.map(dayCell).join('')}</div>
-          </div>`;
-      };
-
-      const openExportWindow = () => {
-        const win = window.open('', '_blank');
-        if (!win) { alert('請允許彈出視窗'); return; }
-
-        // 基本骨架，避免在模板字串內直接包含 <script>
-        win.document.write('<html><head><meta charset="utf-8"/><title>班表</title></head><body></body></html>');
-        const s = win.document.createElement('script');
-        s.src = 'https://cdn.tailwindcss.com';
-        win.document.head.appendChild(s);
-
-        const container = win.document.createElement('div');
-        container.innerHTML = buildExportHTML();
+            <div class="grid grid-cols-7 gap-2 mt-2">${cells.map(buildCell).join('')}</div>
+          </div>
+        `;
         win.document.body.appendChild(container);
 
-        // 綁定匯出按鈕
         setTimeout(() => {
           const btnCSV = win.document.getElementById('btn-csv');
           const btnPrint = win.document.getElementById('btn-print');
           const btnClose = win.document.getElementById('btn-close');
 
           btnCSV?.addEventListener('click', () => {
-            const y = currentDate.getFullYear(), m = currentDate.getMonth();
             const rows = [['日期','姓名','班別']];
-            const total = getDaysInMonth(y, m);
-            for (let d = 1; d <= total; d++) {
+            for (let d = 1; d <= days; d++) {
               staffs.forEach((name, i) => {
                 const v = schedule[d - 1]?.[i] ?? '';
                 const t = getShiftText(v);
@@ -505,7 +508,7 @@
         catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
       };
 
-      // 統計
+      // 統計（依日期裁切後時段）
       const stats = useMemo(()=>{
         const result = staffs.reduce((acc,n)=>(acc[n]={totalDays:0,totalHours:0,leaveDays:0}, acc), {});
         const y = currentDate.getFullYear(), m = currentDate.getMonth();
@@ -529,7 +532,10 @@
         return (
           <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
             <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-              <h1 className="text-3xl font-bold text-center text-gray-900">排班系統登入</h1>
+              <div className="flex items-center justify-between">
+                <h1 className="text-3xl font-bold text-gray-900">排班系統登入</h1>
+                <span className="text-xs text-gray-500">版本 {CODE_VERSION}</span>
+              </div>
               {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
@@ -555,16 +561,31 @@
         );
       }
 
-      // 已登入畫面
-      const daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
+      // 已登入畫面（月份行事曆）
+      const y = currentDate.getFullYear();
+      const m = currentDate.getMonth();
+      const totalDays = getDaysInMonth(y, m);
+      const first = new Date(y, m, 1);
+      const firstDowMonStart = (first.getDay() + 6) % 7;
+      const calendarCells = Array.from({ length: firstDowMonStart }, () => null)
+        .concat(Array.from({ length: totalDays }, (_, i) => i + 1));
+      while (calendarCells.length % 7 !== 0) calendarCells.push(null);
+
       return (
-        <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800 antialiased">
-          <header className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <h1 className="text-4xl font-bold text-gray-900">排班系統</h1>
-              <button onClick={doLogout} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
+        <div className="min-h-screen p-4">
+          <header className="mb-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">排班系統（月份行事曆）</h1>
+                <p className="text-gray-600 mt-1">
+                  目前登入：{user.email || '（未提供）'}　｜　工作區：<span className="font-semibold">{WORKSPACE_ID}</span>
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">版本 {CODE_VERSION}</span>
+                <button onClick={doLogout} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
+              </div>
             </div>
-            <p className="text-gray-600">目前登入信箱: {user.email || '（未提供）'}｜工作區：<span className="font-semibold">{WORKSPACE_ID}</span></p>
           </header>
 
           {statusMessage && (
@@ -574,7 +595,7 @@
           )}
 
           {/* 我的資料（姓名） */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-5">
             <div className="flex items-end gap-3">
               <div className="flex-1">
                 <label className="block text-sm text-gray-600 mb-1">我的姓名（會出現在打卡與報表）</label>
@@ -587,11 +608,10 @@
                 {savingName ? '儲存中…' : '儲存姓名'}
               </button>
             </div>
-            <p className="text-xs text-gray-500 mt-2">＊ 每位員工設定一次即可；打卡會將此姓名寫入紀錄。</p>
           </div>
 
           {/* 打卡 + 今日最新上/下班 */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-5">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex gap-2">
                 <button onClick={()=>punch('IN')}  className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600">上班打卡</button>
@@ -651,15 +671,15 @@
             </div>
           </div>
 
-          {/* 排班主功能 */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          {/* 操作列 */}
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-5">
             <div className="flex flex-col md:flex-row items-center justify-between gap-3">
               <div className="flex gap-2 w-full md:w-auto">
                 <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()-1, 1))}
                         className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">上一月</button>
                 <select
-                  value={`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`}
-                  onChange={(e)=>{ const [y,m]=e.target.value.split('-'); setCurrentDate(new Date(+y, +m-1, 1)); }}
+                  value={`${y}-${String(m+1).padStart(2,'0')}`}
+                  onChange={(e)=>{ const [yy,mm]=e.target.value.split('-'); setCurrentDate(new Date(+yy, +mm-1, 1)); }}
                   className="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-full md:w-auto"
                 >
                   {Array.from({length:25},(_,i)=>i-12).map(off=>{
@@ -677,84 +697,92 @@
                        className="border rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-green-500"/>
                 <button onClick={handleAddStaff} className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
-                <button onClick={openExportWindow} className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出班表</button>
+                <button onClick={openExportWindow} className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出月曆</button>
               </div>
             </div>
 
-            <div className="mt-6 border-t pt-4 text-sm text-gray-700">
+            <div className="mt-4 text-sm text-gray-700">
               <div className="flex flex-wrap gap-4">
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格按當日營業時間裁切；匯出月曆只顯示「姓名：班別」）</div>
+                <div className="text-gray-500">（行事曆格內僅顯示「姓名：班別」，合計時數依當日營業時間裁切。）</div>
               </div>
             </div>
           </div>
 
-          <div className="text-center my-6 text-blue-600 font-medium">點格子循環：早班 ⭢ 早+午班 ⭢ 午班 ⭢ 午+晚班 ⭢ 晚班 ⭢ 休 ⭢ 支援樹林 ⭢ 請假</div>
+          {/* 月份行事曆：週一 → 週日 */}
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-5">
+            <div className="grid grid-cols-7 gap-2 text-center text-sm text-gray-600 mb-2">
+              {['一','二','三','四','五','六','日'].map(w => (
+                <div key={w} className="font-semibold">{w}</div>
+              ))}
+            </div>
 
-          {/* 月份班表主表 */}
-          <div className="overflow-x-auto scrollbar-hide">
-            <div className="min-w-max bg-white rounded-xl shadow-lg overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-gray-200 sticky top-0 z-10">
-                  <tr>
-                    <th className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">日期</th>
-                    {staffs.map((name, idx)=>(
-                      <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
-                        <div className="flex justify-between items-center">
-                          <span>{name}</span>
-                          <button onClick={()=>handleDeleteStaff(name)}
-                                  className="text-red-500 hover:text-red-700" title="刪除">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
-                            </svg>
+            <div className="grid grid-cols-7 gap-2">
+              {calendarCells.map((d, idx) => {
+                if (!d) return <div key={idx} className="min-h-[8rem] border rounded p-2 bg-gray-50"></div>;
+                const date = new Date(y, m, d);
+                return (
+                  <div key={idx} className="min-h-[8rem] border rounded p-2 bg-white">
+                    <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-gray-100 border">{m+1}/{d}</span>
+                      <span></span>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      {staffs.length === 0 && <div className="text-gray-300">—</div>}
+                      {staffs.map((name, si) => {
+                        const val = schedule[d-1]?.[si] ?? '';
+                        const t = getShiftText(val);
+                        const badgeClass = SHIFT_COLOR[(typeof val==='object')?'請假':t] || SHIFT_COLOR[''];
+                        return (
+                          <button
+                            key={name+si}
+                            onClick={()=>cycleShift(d-1, si)}
+                            className={`w-full text-left px-2 py-1 rounded ${badgeClass} hover:opacity-90 transition`}
+                            title="點擊切換班別"
+                          >
+                            <span className="font-medium">{name}</span>：{t || '—'}
                           </button>
-                        </div>
-                      </th>
-                    ))}
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 合計區 */}
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-16">
+            <h3 className="text-lg font-semibold mb-3">本月統計</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="px-3 py-2 text-left">姓名</th>
+                    <th className="px-3 py-2 text-left">總天數</th>
+                    <th className="px-3 py-2 text-left">總時數</th>
+                    <th className="px-3 py-2 text-left">請假天數</th>
+                    <th className="px-3 py-2 text-left">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.from({length: daysInMonth}).map((_, dayIdx)=>{
-                    const day = dayIdx + 1;
-                    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    return (
-                      <tr key={dayIdx} className="border-t">
-                        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
-                          {currentDate.getMonth()+1}月{day}號（{dowName}）
-                        </td>
-                        {staffs.map((_, staffIdx)=>{
-                          const cur = schedule[dayIdx]?.[staffIdx] ?? '';
-                          const cls = SHIFT_COLOR[(typeof cur==='object')?'請假':cur] || 'bg-white text-gray-500';
-                          return (
-                            <td key={staffIdx} className="px-2 py-2 border-r-2 border-gray-300 text-center">
-                              <div onClick={()=>handleShiftChange(dayIdx, staffIdx)}
-                                   className={`p-2 rounded-lg cursor-pointer hover:shadow-md transition ${cls}`}>
-                                {getFullShiftDisplay(cur, date)}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="bg-gray-200 sticky bottom-0 z-10">
-                  <tr>
-                    <td className="px-4 py-3 border-r-2 border-gray-300 font-bold whitespace-nowrap">總計</td>
-                    {staffs.map((name, idx)=>(
-                      <td key={idx} className="px-4 py-3 border-r-2 border-gray-300 text-sm whitespace-nowrap">
-                        <div>
-                          <p>總天數: {stats[name]?.totalDays || 0}</p>
-                          <p>總時數: {stats[name]?.totalHours || 0} 小時</p>
-                          <p>請假天數: {stats[name]?.leaveDays || 0}</p>
-                        </div>
+                  {staffs.map(n => (
+                    <tr key={n} className="border-t">
+                      <td className="px-3 py-2">{n}</td>
+                      <td className="px-3 py-2">{stats[n]?.totalDays || 0}</td>
+                      <td className="px-3 py-2">{stats[n]?.totalHours || 0} 小時</td>
+                      <td className="px-3 py-2">{stats[n]?.leaveDays || 0}</td>
+                      <td className="px-3 py-2">
+                        <button onClick={()=>handleDeleteStaff(n)} className="text-red-600 hover:underline">刪除</button>
                       </td>
-                    ))}
-                  </tr>
-                </tfoot>
+                    </tr>
+                  ))}
+                  {!staffs.length && (
+                    <tr><td className="px-3 py-4 text-gray-400" colSpan="5">尚無員工，請先新增。</td></tr>
+                  )}
+                </tbody>
               </table>
             </div>
           </div>
@@ -767,34 +795,7 @@
                 <p className="mb-6">是否確認刪除員工 <span className="font-semibold text-red-600">"{staffToDel}"</span>？此操作無法復原。</p>
                 <div className="flex justify-center gap-3">
                   <button onClick={()=>{ setConfirmOpen(false); setStaffToDel(null); }} className="px-4 py-2 bg-gray-200 rounded-lg">取消</button>
-                  <button onClick={async ()=>{
-                    await (async ()=>{
-                      const name = staffToDel;
-                      if (!name){ setConfirmOpen(false); return; }
-                      const idx = staffs.findIndex(n => n === name);
-                      if (idx === -1){
-                        setStatusMessage('找不到該員工'); setTimeout(()=>setStatusMessage(''),1600);
-                        setConfirmOpen(false); setStaffToDel(null); return;
-                      }
-                      const nextStaffs = staffs.filter((_, i)=> i !== idx);
-                      const nextSched  = (schedule||[]).map(day=> Array.isArray(day) ? day.filter((_,i)=> i!==idx) : []);
-                      setStaffs(nextStaffs);
-                      setSchedule(nextSched);
-                      try{
-                        if(db && user){
-                          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-                          await setDoc(ref, { names: nextStaffs }, { merge:true });
-                          const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1, monthId=`${y}-${String(mo).padStart(2,'0')}`;
-                          const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-                          await setDoc(sref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date() }, { merge:true });
-                        }
-                        setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-                      }catch(e){
-                        console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-                      }
-                    })();
-                    setConfirmOpen(false); setStaffToDel(null);
-                  }} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
+                  <button onClick={()=>confirmDeleteStaff(staffToDel)} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
                 </div>
               </div>
             </div>
