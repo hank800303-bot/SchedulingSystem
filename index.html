@@ -314,7 +314,7 @@
         }
       };
 
-/* ===== 在「/* 登入/註冊/登出 */」註解的上方貼上以下整段 ===== */
+// ===== Handlers & helpers (place ABOVE the "/* 登入/註冊/登出 */" section) =====
 
 // 轉存班表格式（避免 undefined）
 const sanitizeSchedule = (data) =>
@@ -344,6 +344,7 @@ const saveSchedule = debounce(async (scheduleData) => {
   }
 }, 500);
 
+// 手動儲存
 const manualSave = () => saveSchedule(schedule);
 
 // 點格子循環班別
@@ -396,6 +397,31 @@ const handleAddStaff = async () => {
     setTimeout(() => setStatusMessage(''), 2000);
   }
 };
+
+// 刪除員工（開啟確認視窗）
+const handleDeleteStaff = (name) => { setStaffToDel(name); setConfirmOpen(true); };
+
+// 儲存「我的姓名」到 Firestore（打卡/報表會帶上）
+async function saveMyName() {
+  if (!db || !user) return;
+  setSavingName(true);
+  try {
+    const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+    await setDoc(
+      ref,
+      { displayName: myName || '', email: user.email || '', updatedAt: new Date() },
+      { merge: true }
+    );
+    setStatusMessage('姓名已儲存');
+    setTimeout(() => setStatusMessage(''), 1200);
+  } catch (e) {
+    console.error('儲存姓名失敗：', e);
+    setStatusMessage(`儲存姓名失敗：${e.code || e.message}`);
+    setTimeout(() => setStatusMessage(''), 2000);
+  } finally {
+    setSavingName(false);
+  }
+}
 
 // 刪除員工（開啟確認視窗）
 const handleDeleteStaff = (name) => { setStaffToDel(name); setConfirmOpen(true); };
