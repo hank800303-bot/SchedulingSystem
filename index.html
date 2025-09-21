@@ -50,7 +50,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-29';
+    const CODE_VERSION = '20250922-30';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -78,7 +78,7 @@
 
     /* ===== 工具與時間規則 ===== */
     const toMin = (h,m=0)=> h*60+m;
-    const fmtHM = (min)=> `${String(Math.floor(min/60)).padStart(2,'0')}:${String(min%60).padStart(2,'0')}`;
+    const fmtHM  = (min)=> `${String(Math.floor(min/60)).padStart(2,'0')}:${String(min%60).padStart(2,'0')}`;
     const fmtHours = (mins)=> {
       const h=mins/60; return (Math.abs(h-Math.round(h))<1e-9)? `${Math.round(h)}小時` : `${(Math.round(h*2)/2).toFixed(1)}小時`;
     };
@@ -128,6 +128,68 @@
         <div className="font-bold">{text}</div>
         <div className="text-xs">{info.label}</div>
       </>);
+    };
+
+    // 產生「月份行事曆」HTML（不依賴 Tailwind，下載與列印共用）
+    const buildCalendarHTML = (y, mIndex0, staffs, schedule) => {
+      const m = mIndex0 + 1; // 顯示用月份
+      const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+      const total = getDaysInMonth(y, mIndex0);
+      const first = new Date(y, mIndex0, 1);
+      const firstDowMonStart = (first.getDay() + 6) % 7; // 週一起算 offset
+
+      // 產生格子資料（前置空白 + 1..total + 尾端補足）
+      const cells = Array.from({length:firstDowMonStart}, ()=>null)
+        .concat(Array.from({length: total}, (_,i)=> i+1));
+      while(cells.length % 7 !== 0) cells.push(null);
+
+      // 用 schedule/staffs 組出每格內容（姓名：班別；排除休/請假）
+      const renderDay = (d) => {
+        if (!d) return '';
+        const items = staffs.map((name, si) => {
+          const v = (schedule?.[d-1]?.[si]) ?? '';
+          const t = getShiftText(v);
+          if (!t || t==='休' || t==='請假') return null;
+          return `<div class="item"><span class="name">${esc(name)}</span>：${esc(t)}</div>`;
+        }).filter(Boolean);
+        return items.length ? items.join('') : `<div class="item empty">—</div>`;
+      };
+
+      return `<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>${y}年${String(m).padStart(2,'0')}月 班表（週一→週日）</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;margin:0;padding:16px;color:#111;background:#fff}
+h1{margin:0 0 12px;font-size:20px}
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:8px;color:#6b7280;font-weight:600;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.cell{min-height:120px;border:1px solid #e5e7eb;border-radius:8px;padding:8px}
+.header{display:flex;align-items:center;justify-content:space-between}
+.datepill{display:inline-block;font-size:12px;color:#6b7280;border:1px solid #e5e7eb;border-radius:6px;padding:2px 6px}
+.item{font-size:14px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty{color:#c7c7c7}
+.footer{margin-top:12px;color:#6b7280;font-size:12px}
+@media print{.footer{display:none}}
+</style>
+</head>
+<body>
+<h1>${y}年${String(m).padStart(2,'0')}月 班表（週一→週日）</h1>
+<div class="week"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>
+<div class="grid">
+${cells.map(d => d ? `
+  <div class="cell">
+    <div class="header"><span class="datepill">${m}/${d}</span><span></span></div>
+    ${renderDay(d)}
+  </div>` : `<div class="cell"></div>`).join('')}
+</div>
+<div class="footer">＊此檔為可列印之月份行事曆匯出檔（不顯示休/請假）。</div>
+</body>
+</html>`;
     };
 
     /* ===== App ===== */
@@ -269,7 +331,7 @@
         }finally{ setSavingName(false); }
       }
 
-      /* 儲存班表（去除 undefined） */
+      /* 儲存班表 */
       const sanitizeSchedule = (data)=>
         Array.isArray(data) ? data.map(row => Array.isArray(row) ? row.map(v => (v===undefined?'':v)) : []) : [];
       const saveSchedule = debounce(async (scheduleData)=>{
@@ -347,7 +409,7 @@
         }
       };
 
-      /* 打卡（每日 + 扁平 mirror；顯示錯誤碼；延遲刷新避免 serverTimestamp 尚未落地） */
+      /* 打卡（每日 + 扁平 mirror） */
       const punch = async (type)=>{
         if(!db || !user){ setStatusMessage('尚未登入，無法打卡'); setTimeout(()=>setStatusMessage(''),2000); return; }
         const now = new Date();
@@ -374,13 +436,12 @@
             dateKey, monthKey, by:'web', meta:{ ua:navigator.userAgent||'' }
           });
         }catch(e){
-          console.warn('punch flat mirror fail（請檢查 attendance_flat 規則或索引）', e);
+          console.warn('punch flat mirror fail', e);
         }
 
         setStatusMessage(type==='IN'?'上班打卡成功！':'下班打卡成功！');
         setTimeout(()=>setStatusMessage(''),1600);
 
-        // 延遲刷新，等 serverTimestamp 寫入生效
         setTimeout(async ()=>{
           try{
             const snap = await getDocs(dailyRef);
@@ -393,43 +454,28 @@
         }, 600);
       };
 
-      /* 匯出：CSV（僅顯示有上班者） */
-      const downloadScheduleCSV = ()=>{
-        const y=currentDate.getFullYear(), m=currentDate.getMonth();
-        const rows=[['日期','姓名','班別']];
-        const total=getDaysInMonth(y,m);
-        for(let d=1; d<=total; d++){
-          staffs.forEach((name,i)=>{
-            const v=schedule[d-1]?.[i] ?? '';
-            const t=getShiftText(v);
-            if(!t || t==='休' || t==='請假') return;
-            rows.push([`${y}-${pad2(m+1)}-${pad2(d)}`, name, t]);
-          });
-        }
-        const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
-        const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-        const url=URL.createObjectURL(blob);
-        const a=document.createElement('a'); a.href=url; a.download=`班表_${y}-${pad2(m+1)}.csv`; a.click();
+      /* 下載「月份行事曆」HTML（取代原本 CSV） */
+      const downloadCalendarHTML = ()=>{
+        const y=currentDate.getFullYear(), m0=currentDate.getMonth();
+        const html = buildCalendarHTML(y, m0, staffs, schedule);
+        const blob = new Blob([html], {type:'text/html;charset=utf-8;'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `班表_${y}-${pad2(m0+1)}.html`;
+        a.click();
         URL.revokeObjectURL(url);
       };
 
-      /* 匯出：友善列印（行事曆內容注入新視窗） */
+      /* 友善列印（同樣用月份行事曆 HTML） */
       const printScheduleModal = ()=>{
-        const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1;
-        const win=window.open('','_blank'); if(!win){ alert('請允許彈出視窗'); return; }
-        win.document.write(`
-          <html><head>
-            <meta charset="utf-8"/>
-            <title>${y}年${pad2(mo)}月 班表</title>
-          </head>
-          <body class="p-6">
-            <h1 class="text-2xl font-bold mb-4">${y}年${pad2(mo)}月 班表（週一→週日）</h1>
-            <div id="content">${exportRef.current ? exportRef.current.innerHTML : ''}</div>
-          </body></html>
-        `);
-        const s=win.document.createElement('script'); s.src='https://cdn.tailwindcss.com';
-        win.document.head.appendChild(s);
-        win.document.close(); win.focus();
+        const y=currentDate.getFullYear(), m0=currentDate.getMonth();
+        const html = buildCalendarHTML(y, m0, staffs, schedule);
+        const win=window.open('','_blank');
+        if(!win){ alert('請允許彈出視窗'); return; }
+        win.document.write(html);
+        win.document.close();
+        win.focus();
       };
 
       /* 出勤彙總（B 方案） */
@@ -771,7 +817,7 @@
             </div>
           )}
 
-          {/* 匯出班表（行事曆，週一→週日）— 縮小版並避免被遮住 */}
+          {/* 匯出班表（行事曆，週一→週日） */}
           {exportOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
@@ -780,8 +826,8 @@
                     {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
                   </h3>
                   <div className="flex items-center gap-2">
-                    <button onClick={downloadScheduleCSV}
-                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載CSV</button>
+                    <button onClick={downloadCalendarHTML}
+                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（HTML）</button>
                     <button onClick={printScheduleModal}
                             className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
                     <button onClick={()=>setExportOpen(false)}
@@ -833,7 +879,7 @@
             </div>
           )}
 
-          {/* 出勤彙總（本月）— 也調整成不被遮擋 */}
+          {/* 出勤彙總（本月） */}
           {attOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[125]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
@@ -857,14 +903,17 @@
                       const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1;
                       const win=window.open('','_blank'); if(!win){ alert('請允許彈出視窗'); return; }
                       win.document.write(`
-                        <html><head><meta charset="utf-8"/><title>${y}年${pad2(mo)}月 出勤彙總</title></head>
-                        <body class="p-6">
-                          <h1 class="text-2xl font-bold mb-4">${y}年${pad2(mo)}月 出勤彙總</h1>
+                        <html><head><meta charset="utf-8"/><title>${y}年${pad2(mo)}月 出勤彙總</title>
+                        <style>
+                        body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;padding:16px}
+                        table{border-collapse:collapse;width:100%} th,td{border:1px solid #e5e7eb;padding:8px;text-align:left}
+                        thead{background:#f3f4f6}
+                        </style></head>
+                        <body>
+                          <h1 style="margin:0 0 12px;font-size:20px;">${y}年${pad2(mo)}月 出勤彙總</h1>
                           <div id="content">${attRef.current ? attRef.current.innerHTML : ''}</div>
                         </body></html>
                       `);
-                      const s=win.document.createElement('script'); s.src='https://cdn.tailwindcss.com';
-                      win.document.head.appendChild(s);
                       win.document.close(); win.focus();
                     }}
                             className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800" disabled={attLoading}>友善列印</button>
