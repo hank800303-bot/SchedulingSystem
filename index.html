@@ -149,6 +149,7 @@
 
       const [confirmOpen,setConfirmOpen] = useState(false);
       const [staffToDel,setStaffToDel] = useState(null);
+      
 
       // 打卡/成員
       const [myTodayLogs,setMyTodayLogs] = useState([]);
@@ -161,6 +162,8 @@
 
       // 今日所有人的最新「上班 / 下班」
       const [todayLatestIO, setTodayLatestIO] = useState([]); // {uid, displayName, email, inTs, outTs}
+      // 自動載入今日所有人的最新上/下班（登入或 db 就緒時）useEffect(() => {if (!db || !user) return;loadTodayLatestIO();}, [db, user]);
+
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -416,7 +419,7 @@
       /* 登入/註冊/登出 */
       const doRegister = async ()=>{
         setError('');
-        if(password.length<6){ setError('密碼長度必須至少為6個字元'); return; }
+        if(password.length<4){ setError('密碼長度必須至少為4個字元'); return; }
         try{
           await createUserWithEmailAndPassword(auth, email, password);
           rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
