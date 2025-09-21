@@ -42,7 +42,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const {
       initializeApp, getAuth, onAuthStateChanged,
@@ -68,7 +68,7 @@
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
-    // 你的 Firebase 設定
+    // 你的 Firebase 設定（無 analytics）
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
       authDomain: "zhenan-scheduler.firebaseapp.com",
@@ -88,11 +88,15 @@
     const fmtTime = (ts) => ts?.toDate ? ts.toDate().toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit' }) : '—';
     const fmtDateTime = (ts) => ts?.toDate ? ts.toDate().toLocaleString('zh-TW', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
 
+    // 本地時區 yyyy-MM-dd（避免用 UTC 導致跨日）
+    const pad2 = (n)=> String(n).padStart(2,'0');
+    const ymdLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+
     const getBusinessWindow = (date) => {
       const dow = date.getDay(); // 0=日
       if (dow === 0) return { open: toMin(9,30), close: toMin(21,0) }; // 週日
       if (dow === 6) return { open: toMin(9,0),  close: toMin(21,0) }; // 週六
-      return { open: toMin(9,0),  close: toMin(22,0) };                  // 週一~週五
+      return { open: toMin(9,0),  close: toMin(22,0) };                // 週一~週五
     };
     const getShiftWindowForDate = (date, shiftText) => {
       const { open, close } = getBusinessWindow(date);
@@ -117,19 +121,25 @@
       const label = minutes>0 ? `${fmtHM(start)} - ${fmtHM(end)} (${fmtHours(minutes)})` : '0 小時';
       return { label, hoursMin: minutes };
     };
+
+    // 將儲存值轉成文字：物件代表請假
+    const getShiftText = (shift) => (typeof shift === 'object' && shift) ? '請假' : (shift || '');
+
     const getFullShiftDisplay = (shift, date) => {
-      const text = (typeof shift==='object' && shift)? '請假' : (shift || '');
+      const text = getShiftText(shift);
       if (!text) return '';
       if (text==='請假' && typeof shift==='object') return '請假';
       const { label } = getShiftWindowForDate(date, text);
-      return (<><div className="font-bold">{text}</div><div className="text-xs">{label}</div></>);
+      return (<>
+        <div className="font-bold">{text}</div>
+        <div className="text-xs">{label}</div>
+      </>);
     };
 
     /* ====== 工具 ====== */
     const debounce = (fn, delay=500)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay);} };
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
     const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
-    const ymd = (d)=> d.toISOString().slice(0,10); // yyyy-MM-dd
 
     /* ====== App ====== */
     function App(){
@@ -149,21 +159,23 @@
 
       const [confirmOpen,setConfirmOpen] = useState(false);
       const [staffToDel,setStaffToDel] = useState(null);
-      
 
       // 打卡/成員
       const [myTodayLogs,setMyTodayLogs] = useState([]);
       const [myName, setMyName] = useState('');
       const [savingName, setSavingName] = useState(false);
       const [members, setMembers] = useState([]);     // {uid, displayName, email}
-      const [logDate, setLogDate] = useState(ymd(new Date()));
+      const [logDate, setLogDate] = useState(ymdLocal(new Date()));
       const [logUid, setLogUid] = useState('ALL');
       const [logs, setLogs] = useState([]);
 
-      // 今日所有人的最新「上班 / 下班」
+      // 今日所有人的「最新上班 / 最新下班」
       const [todayLatestIO, setTodayLatestIO] = useState([]); // {uid, displayName, email, inTs, outTs}
-      // 自動載入今日所有人的最新上/下班（登入或 db 就緒時）useEffect(() => {if (!db || !user) return;loadTodayLatestIO();}, [db, user]);
 
+      // 月曆預覽控制
+      const [includeRest, setIncludeRest] = useState(false);
+      const [includeLeave, setIncludeLeave] = useState(false);
+      const calendarRef = useRef(null);
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -249,7 +261,7 @@
       useEffect(()=>{
         (async ()=>{
           if (!db || !user) { setMyTodayLogs([]); return; }
-          const todayKey = ymd(new Date());
+          const todayKey = ymdLocal(new Date());
           try{
             const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${todayKey}/logs`);
             const qy = query(logsRef, orderBy('ts','desc'), limit(10));
@@ -339,28 +351,56 @@
         }
       };
 
-      // 打卡（免索引：寫入成功就顯示成功；列表以 orderBy 後前端濾 uid）
+      // 今日所有人的「最新上班 & 最新下班」各一筆（免索引：只 orderBy，再前端挑）
+      const loadTodayLatestIO = async () => {
+        if (!db || !user) return;
+        const dateKey = ymdLocal(new Date());
+        try {
+          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
+          const qy = query(logsRef, orderBy('ts','desc'), limit(2000));
+          const snap = await getDocs(qy);
+          const map = new Map();
+          for (const docu of snap.docs) {
+            const d = docu.data();
+            const entry = map.get(d.uid) || { uid: d.uid, displayName: d.displayName || '', email: d.email || '', inTs: null, outTs: null };
+            if (d.type === 'IN'  && !entry.inTs)  entry.inTs  = d.ts || null;
+            if (d.type === 'OUT' && !entry.outTs) entry.outTs = d.ts || null;
+            map.set(d.uid, entry);
+          }
+          setTodayLatestIO(Array.from(map.values()));
+          // 可不顯示訊息，避免干擾
+        } catch (e) {
+          console.error('載入今日最新上/下班失敗：', e);
+          setStatusMessage(`載入失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
+        }
+      };
+
+      // 自動載入今日所有人的最新上/下班（登入或 db 就緒時）
+      useEffect(() => {
+        if (!db || !user) return;
+        loadTodayLatestIO();
+      }, [db, user]);
+
+      // 打卡（寫入→更新「我的今日」→刷新「今日最新上/下班」）
       const punch = async (type) => {
         if (!db || !user) return;
-        const dateKey = ymd(new Date());
+        const dateKey = ymdLocal(new Date());
         const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
 
         // 1) 寫入
-       // 2) 更新「今日我的打卡」顯示
-try {
-  const qy = query(logsRef, orderBy('ts','desc'), limit(10));
-  const snap = await getDocs(qy);
-  const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-                        .filter(x => x.uid === user.uid)
-                        .slice(0, 2);
-  setMyTodayLogs(list);
-
-  // ✅ 新增這一行：打卡成功後，刷新「今日所有人的最新上/下班」
-  loadTodayLatestIO();
-
-} catch (e) {
-  console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
-}
+        try {
+          await addDoc(logsRef, {
+            uid: user.uid, email: user.email || '', displayName: myName || '',
+            type, ts: serverTimestamp(), by: 'web', meta: { ua: navigator.userAgent || '' }
+          });
+          setStatusMessage(type === 'IN' ? '上班打卡成功！' : '下班打卡成功！');
+          setTimeout(() => setStatusMessage(''), 1600);
+        } catch (e) {
+          console.error('打卡寫入失敗：', e);
+          setStatusMessage(`打卡失敗：${e.code || e.message}`);
+          setTimeout(() => setStatusMessage(''), 2000);
+          return;
+        }
 
         // 2) 更新「今日我的打卡」顯示
         try {
@@ -370,58 +410,19 @@ try {
                                 .filter(x => x.uid === user.uid)
                                 .slice(0, 2);
           setMyTodayLogs(list);
+
+          // 打卡成功後，刷新「今日所有人的最新上/下班」
+          loadTodayLatestIO();
+
         } catch (e) {
           console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
-        }
-      };
-
-      // 查詢打卡紀錄（管理者/一般人）
-      const runLogSearch = async () => {
-        if (!db || !user || !logDate) return;
-        try {
-          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${logDate}/logs`);
-          const qy = query(logsRef, orderBy('ts','desc'), limit(500));
-          const snap = await getDocs(qy);
-          let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          if (logUid !== 'ALL') list = list.filter(x => x.uid === logUid);
-          setLogs(list);
-          setStatusMessage(`已載入 ${list.length} 筆打卡`); setTimeout(()=>setStatusMessage(''), 1200);
-        } catch (e) {
-          console.error('查詢打卡失敗：', e);
-          setStatusMessage(`查詢打卡失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
-        }
-      };
-
-      // 今日所有人的「最新上班 & 最新下班」各一筆（免索引：只 orderBy，再前端挑）
-      const loadTodayLatestIO = async () => {
-        if (!db || !user) return;
-        const dateKey = ymd(new Date());
-        try {
-          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
-          const qy = query(logsRef, orderBy('ts','desc'), limit(2000));
-          const snap = await getDocs(qy);
-          // 先建立 uid → { inTs?, outTs?, displayName, email }
-          const map = new Map();
-          for (const docu of snap.docs) {
-            const d = docu.data();
-            const entry = map.get(d.uid) || { uid: d.uid, displayName: d.displayName || '', email: d.email || '', inTs: null, outTs: null };
-            if (d.type === 'IN' && !entry.inTs)  entry.inTs  = d.ts || null;
-            if (d.type === 'OUT' && !entry.outTs) entry.outTs = d.ts || null;
-            map.set(d.uid, entry);
-            // 提早結束：若已拿到該人的 IN/OUT 兩筆，就不用再處理他
-          }
-          setTodayLatestIO(Array.from(map.values()));
-          setStatusMessage(`今日最新上/下班：${map.size} 人`); setTimeout(()=>setStatusMessage(''), 1200);
-        } catch (e) {
-          console.error('載入今日最新上/下班失敗：', e);
-          setStatusMessage(`載入失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
         }
       };
 
       /* 登入/註冊/登出 */
       const doRegister = async ()=>{
         setError('');
-        if(password.length<4){ setError('密碼長度必須至少為4個字元'); return; }
+        if(password.length<6){ setError('密碼長度必須至少為6個字元'); return; }
         try{
           await createUserWithEmailAndPassword(auth, email, password);
           rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
@@ -451,7 +452,7 @@ try {
           const date = new Date(y, m, dIdx+1);
           dayRow.forEach((shift, i)=>{
             const name = staffs[i]; if(!name) return;
-            const text = (typeof shift==='object' && shift)? '請假' : (shift||'');
+            const text = getShiftText(shift);
             if (text==='請假'){ result[name].leaveDays += 1; return; }
             const { hoursMin } = getShiftWindowForDate(date, text);
             if (hoursMin>0){ result[name].totalDays += 1; result[name].totalHours += hoursMin/60; }
@@ -460,6 +461,51 @@ try {
         for(const n in result){ result[n].totalHours = Math.round(result[n].totalHours*2)/2; }
         return result;
       }, [schedule, staffs, currentDate]);
+
+      /* 列印預覽與 CSV 匯出（月份行事曆） */
+      const openPrintPreview = () => {
+        const y = currentDate.getFullYear(), mo = currentDate.getMonth() + 1;
+        const win = window.open('', '_blank');
+        const html = calendarRef.current ? calendarRef.current.innerHTML : '<p>（沒有內容）</p>';
+        win.document.write(`
+          <html><head>
+            <meta charset="utf-8"/>
+            <title>${y}年${String(mo).padStart(2,'0')}月 班表</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+          </head>
+          <body class="p-6">
+            <h1 class="text-2xl font-bold mb-4">${y}年${String(mo).padStart(2,'0')}月 班表</h1>
+            ${html}
+            <div class="mt-4 text-sm text-gray-500">＊ 在瀏覽器選單選「列印」即可另存成 PDF。</div>
+          </body></html>
+        `);
+        win.document.close();
+        win.focus();
+      };
+
+      const downloadCalendarCSV = () => {
+        const y = currentDate.getFullYear(), m = currentDate.getMonth();
+        const rows = [['日期','姓名','班別']];
+        const totalDays = getDaysInMonth(y, m);
+        for(let d=1; d<=totalDays; d++){
+          staffs.forEach((name, i)=>{
+            const v = schedule[d-1]?.[i] ?? '';
+            const t = getShiftText(v);
+            if (!t) return;
+            if (!includeRest && t === '休') return;
+            if (!includeLeave && t === '請假') return;
+            rows.push([`${y}-${pad2(m+1)}-${pad2(d)}`, name, t]);
+          });
+        }
+        const csv = rows.map(r => r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+        const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `班表_${y}-${String(m+1).padStart(2,'0')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
 
       /* 未登入畫面 */
       if(!user){
@@ -548,8 +594,8 @@ try {
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">今日所有人的最新上/下班</h2>
-              <button onClick={loadTodayLatestIO} className="px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
-                載入
+              <button onClick={loadTodayLatestIO} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
+                重新整理
               </button>
             </div>
             <div className="mt-4 overflow-x-auto">
@@ -584,7 +630,7 @@ try {
                     </tr>
                   ))}
                   {!todayLatestIO.length && (
-                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（尚未載入或今天還沒人打卡）</td></tr>
+                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（今天尚無資料）</td></tr>
                   )}
                 </tbody>
               </table>
@@ -611,8 +657,7 @@ try {
                   ))}
                 </select>
               </div>
-              <button onClick={runLogSearch}
-                      className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700">
+              <button onClick={async ()=>{ await (runLogSearch()); }} className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700">
                 查詢打卡紀錄
               </button>
             </div>
@@ -685,6 +730,7 @@ try {
 
           <div className="text-center my-6 text-blue-600 font-medium">點格子循環：早班 ⭢ 早+午班 ⭢ 午班 ⭢ 午+晚班 ⭢ 晚班 ⭢ 休 ⭢ 支援樹林 ⭢ 請假</div>
 
+          {/* 月份班表主表 */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="min-w-max bg-white rounded-xl shadow-lg overflow-hidden">
               <table className="w-full text-left">
@@ -747,6 +793,75 @@ try {
                   </tr>
                 </tfoot>
               </table>
+            </div>
+          </div>
+
+          {/* 月份行事曆預覽（只顯示班別、不含時間） */}
+          <div className="bg-white rounded-xl shadow-lg p-6 mt-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <h2 className="text-lg font-semibold">月份行事曆預覽（只顯示班別）</h2>
+              <div className="flex items-center gap-4">
+                <label className="text-sm flex items-center gap-2">
+                  <input type="checkbox" className="h-4 w-4" checked={includeRest} onChange={e=>setIncludeRest(e.target.checked)}/>
+                  包含「休」
+                </label>
+                <label className="text-sm flex items-center gap-2">
+                  <input type="checkbox" className="h-4 w-4" checked={includeLeave} onChange={e=>setIncludeLeave(e.target.checked)}/>
+                  包含「請假」
+                </label>
+                <button onClick={openPrintPreview} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">另開列印版</button>
+                <button onClick={downloadCalendarCSV} className="px-3 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">下載 CSV</button>
+              </div>
+            </div>
+
+            {/* 週標題 */}
+            <div className="grid grid-cols-7 gap-2 mt-4 text-center text-sm text-gray-600">
+              {['日','一','二','三','四','五','六'].map(w => (
+                <div key={w} className="font-semibold">{w}</div>
+              ))}
+            </div>
+
+            {/* 月格子（對齊週幾起始） */}
+            <div ref={calendarRef} className="grid grid-cols-7 gap-2 mt-2">
+              {(() => {
+                const y = currentDate.getFullYear(), m = currentDate.getMonth();
+                const firstDow = new Date(y, m, 1).getDay();         // 本月 1 號星期幾（0=日）
+                const totalDays = getDaysInMonth(y, m);
+                const cells = Array.from({length:firstDow}, ()=>null)
+                  .concat(Array.from({length: totalDays}, (_,i)=> i+1));
+                while(cells.length % 7 !== 0) cells.push(null);
+
+                return cells.map((d, idx) => (
+                  <div key={idx} className="min-h-28 border rounded p-2">
+                    {d ? (
+                      <>
+                        <div className="text-right text-gray-500 text-xs">{d}</div>
+                        <div className="mt-1 space-y-1 text-sm">
+                          {(() => {
+                            const items = staffs.map((name, si) => {
+                              const v = schedule[d-1]?.[si] ?? '';
+                              const t = getShiftText(v);
+                              if (!t) return null;
+                              if (!includeRest && t === '休') return null;
+                              if (!includeLeave && t === '請假') return null;
+                              return (
+                                <div key={name + si} className="truncate">
+                                  <span className="font-medium">{name}</span>：{t}
+                                </div>
+                              );
+                            }).filter(Boolean);
+                            return items.length ? items : <div className="text-gray-300">—</div>;
+                          })()}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ));
+              })()}
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500">
+              ＊ 僅列出該日有排到班別的人（預設不含「休」與「請假」）。若要列入，勾選上方選項。
             </div>
           </div>
 
