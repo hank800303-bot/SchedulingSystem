@@ -421,7 +421,7 @@
         const dateKey  = ymdLocal(now);
         const monthKey = ymLocal(now);
         const dailyRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
-        const flatRef  = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat/logs`);
+        const flatRef  = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat＿logs`);
 
         try{
           await addDoc(dailyRef, {
@@ -512,7 +512,7 @@
         setAttOpen(true); setAttLoading(true);
         try{
           const monthKey = ymLocal(currentDate);
-          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat/logs`);
+          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat＿logs`);
           const qy = query(flatRef, where('monthKey','==',monthKey), limit(20000));
           const snap = await getDocs(qy);
 
