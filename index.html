@@ -86,9 +86,6 @@
       return (Math.abs(h - Math.round(h)) < 1e-9) ? `${Math.round(h)}小時` : `${(Math.round(h*2)/2).toFixed(1)}小時`;
     };
     const fmtTime = (ts) => ts?.toDate ? ts.toDate().toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit' }) : '—';
-    const fmtDateTime = (ts) => ts?.toDate ? ts.toDate().toLocaleString('zh-TW', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
-
-    // 本地時區 yyyy-MM-dd（避免用 UTC 導致跨日）
     const pad2 = (n)=> String(n).padStart(2,'0');
     const ymdLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
 
@@ -165,11 +162,6 @@
       const [myName, setMyName] = useState('');
       const [savingName, setSavingName] = useState(false);
       const [members, setMembers] = useState([]);     // {uid, displayName, email}
-      const [logDate, setLogDate] = useState(ymdLocal(new Date()));
-      const [logUid, setLogUid] = useState('ALL');
-      const [logs, setLogs] = useState([]);
-
-      // 今日所有人的「最新上/下班」
       const [todayLatestIO, setTodayLatestIO] = useState([]);
 
       // 匯出：彈窗
@@ -227,22 +219,7 @@
         })();
       }, [db, user]);
 
-      const saveMyName = async () => {
-        if (!db || !user) return;
-        setSavingName(true);
-        try {
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-          await setDoc(ref, { displayName: myName || '', email: user.email || '', updatedAt: new Date() }, { merge: true });
-          setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''), 1200);
-        } catch (e) {
-          console.error('儲存姓名失敗：', e);
-          setStatusMessage(`儲存姓名失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
-        } finally {
-          setSavingName(false);
-        }
-      };
-
-      // 讀取 members（供查詢下拉用）
+      // 讀取 members（供查詢下拉用，之後若要做後台可用）
       useEffect(() => {
         (async ()=>{
           if (!db || !user) return;
@@ -272,83 +249,6 @@
           }catch(e){ console.warn('讀取打卡失敗：', e); setMyTodayLogs([]); }
         })();
       },[db,user]);
-
-      // 儲存班表
-      const sanitizeSchedule = (data)=> Array.isArray(data)
-        ? data.map(day=> Array.isArray(day)? day.map(s=> s===undefined?'':s) : [])
-        : [];
-      const saveScheduleNow = async (data)=>{
-        if(!db || !user) return;
-        try{
-          const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${String(m).padStart(2,'0')}`;
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          await setDoc(ref, { schedule: JSON.stringify(sanitizeSchedule(data)), lastUpdated: new Date() }, { merge:true });
-          setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''), 1600);
-        }catch(e){
-          console.error('儲存班表失敗：', e);
-          setStatusMessage(`儲存班表失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
-        }
-      };
-      const saveScheduleDebounced = useMemo(()=> debounce(saveScheduleNow, 500), [db,user,currentDate]);
-      const manualSave = ()=> saveScheduleNow(schedule);
-
-      // 切換班別
-      const handleShiftChange = (dayIdx, staffIdx)=>{
-        const next=[...schedule];
-        next[dayIdx] = Array.isArray(next[dayIdx]) ? [...next[dayIdx]] : Array(staffs.length).fill('');
-        const cur = next[dayIdx][staffIdx] ?? '';
-        const curText = (typeof cur==='object') ? '請假' : cur;
-        const i = Math.max(0, SHIFT_OPTIONS.indexOf(curText));
-        const ni = (i+1) % SHIFT_OPTIONS.length;
-        const ns = SHIFT_OPTIONS[ni];
-        next[dayIdx][staffIdx] = (ns==='請假')? {shift:'請假', type:'未備註', days:1, notes:''} : ns;
-        setSchedule(next);
-        saveScheduleDebounced(next);
-      };
-
-      // 新增/刪除員工
-      const handleAddStaff = async ()=>{
-        const name = (newStaffName||'').trim();
-        if(!name) return;
-        if(staffs.includes(name)){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1600); return; }
-        const nextStaffs=[...staffs, name];
-        setStaffs(nextStaffs);
-        setSchedule((schedule||[]).map(day=> Array.isArray(day)? [...day, ''] : Array(nextStaffs.length).fill('')));
-        setNewStaffName('');
-        if(!db || !user) return;
-        try{
-          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-          await setDoc(ref, { names: nextStaffs }, { merge:true });
-          setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ console.error(e); setStatusMessage(`新增員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000); }
-      };
-
-      const handleDeleteStaff = (name)=>{ setStaffToDel(name); setConfirmOpen(true); };
-
-      const confirmDeleteStaff = async ()=>{
-        if (!staffToDel){ setConfirmOpen(false); return; }
-        const idx = staffs.findIndex(n => n === staffToDel);
-        if (idx === -1){
-          setStatusMessage('找不到該員工'); setTimeout(()=>setStatusMessage(''),1600);
-          setConfirmOpen(false); setStaffToDel(null); return;
-        }
-        const nextStaffs = staffs.filter((_, i)=> i !== idx);
-        const nextSched  = (schedule||[]).map(day=> Array.isArray(day) ? day.filter((_,i)=> i!==idx) : []);
-        setStaffs(nextStaffs);
-        setSchedule(nextSched);
-        try{
-          if(db && user){
-            const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-            await setDoc(ref, { names: nextStaffs }, { merge:true });
-            await saveScheduleNow(nextSched);
-          }
-          setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){
-          console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{
-          setConfirmOpen(false); setStaffToDel(null); // 自動關閉
-        }
-      };
 
       // 今日所有人的「最新上班 & 最新下班」各一筆
       const loadTodayLatestIO = async () => {
@@ -410,7 +310,7 @@
           setMyTodayLogs(list);
           loadTodayLatestIO(); // 立即刷新今日最新上/下班
         } catch (e) {
-          console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
+          console.warn('打卡寫入成功，但列表查詢失敗', e);
         }
       };
 
@@ -480,7 +380,7 @@
         URL.revokeObjectURL(url);
       };
 
-      /* 匯出：列印（用新視窗＋DOM 注入 script，避免 </script> 問題） */
+      /* 匯出：列印（新視窗 + 動態注入 tailwind 腳本，避免誤判結束標籤） */
       const printExportModal = () => {
         const y = currentDate.getFullYear(), mo = currentDate.getMonth() + 1;
         const win = window.open('', '_blank');
@@ -783,7 +683,7 @@
                       while(cells.length % 7 !== 0) cells.push(null);
 
                       return cells.map((d, idx) => (
-                        <div key={idx} className="min-h-28 border rounded p-2">
+                        <div key={idx} className="min-h-[7rem] border rounded p-2">
                           {d ? (
                             <>
                               <div className="text-right text-gray-500 text-xs">{d}</div>
@@ -821,7 +721,35 @@
                 <p className="mb-6">是否確認刪除員工 <span className="font-semibold text-red-600">"{staffToDel}"</span>？此操作無法復原。</p>
                 <div className="flex justify-center gap-3">
                   <button onClick={()=>{ setConfirmOpen(false); setStaffToDel(null); }} className="px-4 py-2 bg-gray-200 rounded-lg">取消</button>
-                  <button onClick={confirmDeleteStaff} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
+                  <button onClick={async ()=>{
+                    // 單獨包一層，確保按下後會自動關閉
+                    await (async ()=>{
+                      const name = staffToDel;
+                      if (!name){ setConfirmOpen(false); return; }
+                      const idx = staffs.findIndex(n => n === name);
+                      if (idx === -1){
+                        setStatusMessage('找不到該員工'); setTimeout(()=>setStatusMessage(''),1600);
+                        setConfirmOpen(false); setStaffToDel(null); return;
+                      }
+                      const nextStaffs = staffs.filter((_, i)=> i !== idx);
+                      const nextSched  = (schedule||[]).map(day=> Array.isArray(day) ? day.filter((_,i)=> i!==idx) : []);
+                      setStaffs(nextStaffs);
+                      setSchedule(nextSched);
+                      try{
+                        if(db && user){
+                          const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+                          await setDoc(ref, { names: nextStaffs }, { merge:true });
+                          const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${String(m).padStart(2,'0')}`;
+                          const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
+                          await setDoc(sref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date() }, { merge:true });
+                        }
+                        setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
+                      }catch(e){
+                        console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+                      }
+                    })();
+                    setConfirmOpen(false); setStaffToDel(null);
+                  }} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
                 </div>
               </div>
             </div>
