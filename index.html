@@ -314,159 +314,114 @@
         }
       };
 
-      /* 登入/註冊/登出 */
-      const doRegister = async ()=>{
-        setError('');
-        if(password.length<6){ setError('密碼長度必須至少為6個字元'); return; }
-        try{
-          await createUserWithEmailAndPassword(auth, email, password);
-          rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
-          setStatusMessage('註冊成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
-      const doLogin = async ()=>{
-        setError('');
-        try{
-          await signInWithEmailAndPassword(auth, email, password);
-          rememberEmail? localStorage.setItem('rememberedEmail', email) : localStorage.removeItem('rememberedEmail');
-          setStatusMessage('登入成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
-      const doLogout = async ()=>{
-        setError('');
-        try{ await signOut(auth); setStatusMessage('登出成功！'); setTimeout(()=>setStatusMessage(''),1600); }
-        catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); }
-      };
+/* ===== 在「/* 登入/註冊/登出 */」註解的上方貼上以下整段 ===== */
 
-      /* 統計（依當天實際時段計） */
-      const stats = useMemo(()=>{
-        const result = staffs.reduce((acc,n)=>(acc[n]={totalDays:0,totalHours:0,leaveDays:0}, acc), {});
-        const y = currentDate.getFullYear(), m = currentDate.getMonth();
-        (schedule||[]).forEach((dayRow, dIdx)=>{
-          if(!Array.isArray(dayRow)) return;
-          const date = new Date(y, m, dIdx+1);
-          dayRow.forEach((shift, i)=>{
-            const name = staffs[i]; if(!name) return;
-            const text = getShiftText(shift);
-            if (text==='請假'){ result[name].leaveDays += 1; return; }
-            const { hoursMin } = getShiftWindowForDate(date, text);
-            if (hoursMin>0){ result[name].totalDays += 1; result[name].totalHours += hoursMin/60; }
-          });
-        });
-        for(const n in result){ result[n].totalHours = Math.round(result[n].totalHours*2)/2; }
-        return result;
-      }, [schedule, staffs, currentDate]);
+// 轉存班表格式（避免 undefined）
+const sanitizeSchedule = (data) =>
+  Array.isArray(data)
+    ? data.map(row => Array.isArray(row) ? row.map(v => (v === undefined ? '' : v)) : [])
+    : [];
 
-      /* 匯出：CSV（只列出有班的人，排除「休/請假」） */
-      const downloadCalendarCSV = () => {
-        const y = currentDate.getFullYear(), m = currentDate.getMonth();
-        const rows = [['日期','姓名','班別']];
-        const totalDays = getDaysInMonth(y, m);
-        for(let d=1; d<=totalDays; d++){
-          staffs.forEach((name, i)=>{
-            const v = schedule[d-1]?.[i] ?? '';
-            const t = getShiftText(v);
-            if (!t || t==='休' || t==='請假') return;
-            rows.push([`${y}-${pad2(m+1)}-${pad2(d)}`, name, t]);
-          });
-        }
-        const csv = rows.map(r => r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
-        const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `班表_${y}-${String(m+1).padStart(2,'0')}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-      };
+// 寫入 Firestore（當月）
+const saveSchedule = debounce(async (scheduleData) => {
+  if (!db || !user) return;
+  try {
+    const y = currentDate.getFullYear();
+    const m = currentDate.getMonth() + 1;
+    const monthId = `${y}-${String(m).padStart(2,'0')}`;
+    const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
+    await setDoc(
+      sref,
+      { schedule: JSON.stringify(sanitizeSchedule(scheduleData)), lastUpdated: new Date() },
+      { merge: true }
+    );
+    setStatusMessage('班表已儲存！');
+    setTimeout(() => setStatusMessage(''), 1200);
+  } catch (e) {
+    console.error('儲存班表失敗：', e);
+    setStatusMessage(`儲存失敗：${e.code || e.message}`);
+    setTimeout(() => setStatusMessage(''), 2000);
+  }
+}, 500);
 
-      /* 匯出：列印（新視窗 + 動態注入 tailwind 腳本，避免誤判結束標籤） */
-      const printExportModal = () => {
-        const y = currentDate.getFullYear(), mo = currentDate.getMonth() + 1;
-        const win = window.open('', '_blank');
-        win.document.write(`
-          <html><head>
-            <meta charset="utf-8"/>
-            <title>${y}年${String(mo).padStart(2,'0')}月 班表</title>
-          </head>
-          <body class="p-6">
-            <h1 class="text-2xl font-bold mb-4">${y}年${String(mo).padStart(2,'0')}月 班表</h1>
-            <div id="content">${exportRef.current ? exportRef.current.innerHTML : ''}</div>
-            <div class="mt-4 text-sm" style="color:#6b7280">＊ 瀏覽器選單「列印」可另存 PDF。</div>
-          </body></html>
-        `);
-        const s = win.document.createElement('script');
-        s.src = 'https://cdn.tailwindcss.com';
-        win.document.head.appendChild(s);
-        win.document.close();
-        win.focus();
-      };
+const manualSave = () => saveSchedule(schedule);
 
-      /* 未登入畫面 */
-      if(!user){
-        return (
-          <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-            <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-              <h1 className="text-3xl font-bold text-center text-gray-900">排班系統登入</h1>
-              {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
-                       className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">密碼</label>
-                <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
-                       className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" className="h-4 w-4 text-blue-600 rounded"
-                       checked={rememberEmail} onChange={e=>setRememberEmail(e.target.checked)}/>
-                記住我的電子郵件
-              </label>
-              <div className="flex flex-col gap-2">
-                <button onClick={doLogin} className="w-full py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600">登入</button>
-                <button onClick={doRegister} className="w-full py-2 px-4 bg-green-500 text-white rounded-lg hover:bg-green-600">註冊</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
+// 點格子循環班別
+const handleShiftChange = (dayIndex, staffIndex) => {
+  const next = [...(schedule || [])];
+  const cols = staffs.length;
+  next[dayIndex] = next[dayIndex] ? [...next[dayIndex]] : Array(cols).fill('');
+  const cur = next[dayIndex][staffIndex] || '';
+  const curText = (typeof cur === 'object') ? '請假' : cur;
+  const idx = SHIFT_OPTIONS.indexOf(curText);
+  const nextIdx = (idx + 1) % SHIFT_OPTIONS.length;
+  const nextShift = SHIFT_OPTIONS[nextIdx];
+  next[dayIndex][staffIndex] =
+    (nextShift === '請假')
+      ? { shift: '請假', type: '未備註', days: 1, notes: '' }
+      : nextShift;
+  setSchedule(next);
+  saveSchedule(next);
+};
 
-      /* 已登入畫面（回到舊版主表版面，只多一顆「匯出班表」） */
-      const daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
-      return (
-        <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800 antialiased">
-          <header className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <h1 className="text-4xl font-bold text-gray-900">排班系統</h1>
-              <button onClick={doLogout} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
-            </div>
-            <p className="text-gray-600">目前登入信箱: {user.email || '（未提供）'}｜工作區：<span className="font-semibold">{WORKSPACE_ID}</span></p>
-          </header>
+// 新增員工
+const handleAddStaff = async () => {
+  const name = (newStaffName || '').trim();
+  if (!name) return;
+  if (staffs.includes(name)) {
+    setStatusMessage('該員工已存在！');
+    setTimeout(() => setStatusMessage(''), 1200);
+    return;
+  }
+  const nextStaffs = [...staffs, name];
+  setStaffs(nextStaffs);
 
-          {statusMessage && (
-            <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-6 py-2 rounded-full shadow-lg z-50">
-              {statusMessage}
-            </div>
-          )}
+  // 現有每一天的列末尾加一欄
+  const next = (schedule || []).map(row =>
+    Array.isArray(row) ? [...row, ''] : Array(nextStaffs.length).fill('')
+  );
+  setSchedule(next);
+  setNewStaffName('');
 
-          {/* 我的資料（姓名） */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label className="block text-sm text-gray-600 mb-1">我的姓名（會出現在打卡與報表）</label>
-                <input className="w-full border rounded px-3 py-2"
-                       value={myName} onChange={e=>setMyName(e.target.value)} placeholder="例如：王小明"/>
-              </div>
-              <button onClick={saveMyName}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-60"
-                      disabled={savingName}>
-                {savingName ? '儲存中…' : '儲存姓名'}
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">＊ 每位員工設定一次即可；打卡會將此姓名寫入紀錄。</p>
-          </div>
+  try {
+    if (db && user) {
+      const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+      await setDoc(ref, { names: nextStaffs }, { merge: true });
+      setStatusMessage('新增員工成功！');
+      setTimeout(() => setStatusMessage(''), 1200);
+    }
+  } catch (e) {
+    console.error('新增員工失敗：', e);
+    setStatusMessage(`新增失敗：${e.code || e.message}`);
+    setTimeout(() => setStatusMessage(''), 2000);
+  }
+};
+
+// 刪除員工（開啟確認視窗）
+const handleDeleteStaff = (name) => { setStaffToDel(name); setConfirmOpen(true); };
+
+// 儲存「我的姓名」到 Firestore（打卡/報表會帶上）
+async function saveMyName() {
+  if (!db || !user) return;
+  setSavingName(true);
+  try {
+    const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+    await setDoc(
+      ref,
+      { displayName: myName || '', email: user.email || '', updatedAt: new Date() },
+      { merge: true }
+    );
+    setStatusMessage('姓名已儲存');
+    setTimeout(() => setStatusMessage(''), 1200);
+  } catch (e) {
+    console.error('儲存姓名失敗：', e);
+    setStatusMessage(`儲存姓名失敗：${e.code || e.message}`);
+    setTimeout(() => setStatusMessage(''), 2000);
+  } finally {
+    setSavingName(false);
+  }
+}
+
 
           {/* 打卡區塊 + 今日最新上/下班（自動載入，可手動刷新） */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
