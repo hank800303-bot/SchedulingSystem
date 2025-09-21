@@ -158,7 +158,9 @@
       const [logDate, setLogDate] = useState(ymd(new Date()));
       const [logUid, setLogUid] = useState('ALL');
       const [logs, setLogs] = useState([]);
-      const [todayLatest, setTodayLatest] = useState([]); // 每位成員最新 1 筆
+
+      // 今日所有人的最新「上班 / 下班」
+      const [todayLatestIO, setTodayLatestIO] = useState([]); // {uid, displayName, email, inTs, outTs}
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -385,23 +387,28 @@
         }
       };
 
-      // 今日所有人的最新打卡（一人一筆）
-      const loadTodayLatest = async () => {
+      // 今日所有人的「最新上班 & 最新下班」各一筆（免索引：只 orderBy，再前端挑）
+      const loadTodayLatestIO = async () => {
         if (!db || !user) return;
         const dateKey = ymd(new Date());
         try {
           const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
-          const qy = query(logsRef, orderBy('ts','desc'), limit(1000)); // 免索引：只排序
+          const qy = query(logsRef, orderBy('ts','desc'), limit(2000));
           const snap = await getDocs(qy);
+          // 先建立 uid → { inTs?, outTs?, displayName, email }
           const map = new Map();
           for (const docu of snap.docs) {
             const d = docu.data();
-            if (!map.has(d.uid)) map.set(d.uid, { id: docu.id, ...d }); // 已按時間倒序，第一筆即最新
+            const entry = map.get(d.uid) || { uid: d.uid, displayName: d.displayName || '', email: d.email || '', inTs: null, outTs: null };
+            if (d.type === 'IN' && !entry.inTs)  entry.inTs  = d.ts || null;
+            if (d.type === 'OUT' && !entry.outTs) entry.outTs = d.ts || null;
+            map.set(d.uid, entry);
+            // 提早結束：若已拿到該人的 IN/OUT 兩筆，就不用再處理他
           }
-          setTodayLatest(Array.from(map.values()));
-          setStatusMessage(`今日最新打卡：${map.size} 人`); setTimeout(()=>setStatusMessage(''), 1200);
+          setTodayLatestIO(Array.from(map.values()));
+          setStatusMessage(`今日最新上/下班：${map.size} 人`); setTimeout(()=>setStatusMessage(''), 1200);
         } catch (e) {
-          console.error('載入今日最新打卡失敗：', e);
+          console.error('載入今日最新上/下班失敗：', e);
           setStatusMessage(`載入失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
         }
       };
@@ -532,11 +539,11 @@
             </div>
           </div>
 
-          {/* 今日所有人的最新打卡 */}
+          {/* 今日所有人的最新「上班 / 下班」 */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">今日所有人的最新打卡</h2>
-              <button onClick={loadTodayLatest} className="px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
+              <h2 className="text-lg font-semibold">今日所有人的最新上/下班</h2>
+              <button onClick={loadTodayLatestIO} className="px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
                 載入
               </button>
             </div>
@@ -544,22 +551,34 @@
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="bg-gray-100">
-                    <th className="px-3 py-2 text-left">時間</th>
                     <th className="px-3 py-2 text-left">姓名</th>
                     <th className="px-3 py-2 text-left">帳號</th>
-                    <th className="px-3 py-2 text-left">類型</th>
+                    <th className="px-3 py-2 text-left">最新上班</th>
+                    <th className="px-3 py-2 text-left">最新下班</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {todayLatest.map(r => (
-                    <tr key={r.id} className="border-t">
-                      <td className="px-3 py-2">{fmtDateTime(r.ts)}</td>
+                  {todayLatestIO.map(r => (
+                    <tr key={r.uid} className="border-t">
                       <td className="px-3 py-2">{r.displayName || '未設定'}</td>
                       <td className="px-3 py-2">{r.email || r.uid}</td>
-                      <td className="px-3 py-2">{r.type === 'IN' ? '上班' : '下班'}</td>
+                      <td className="px-3 py-2">
+                        {r.inTs
+                          ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
+                              上班 {fmtTime(r.inTs)}
+                            </span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-3 py-2">
+                        {r.outTs
+                          ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">
+                              下班 {fmtTime(r.outTs)}
+                            </span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
                     </tr>
                   ))}
-                  {!todayLatest.length && (
+                  {!todayLatestIO.length && (
                     <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（尚未載入或今天還沒人打卡）</td></tr>
                   )}
                 </tbody>
