@@ -169,13 +169,12 @@
       const [logUid, setLogUid] = useState('ALL');
       const [logs, setLogs] = useState([]);
 
-      // 今日所有人的「最新上班 / 最新下班」
-      const [todayLatestIO, setTodayLatestIO] = useState([]); // {uid, displayName, email, inTs, outTs}
+      // 今日所有人的「最新上/下班」
+      const [todayLatestIO, setTodayLatestIO] = useState([]);
 
-      // 月曆預覽控制
-      const [includeRest, setIncludeRest] = useState(false);
-      const [includeLeave, setIncludeLeave] = useState(false);
-      const calendarRef = useRef(null);
+      // 匯出：彈窗
+      const [exportOpen, setExportOpen] = useState(false);
+      const exportRef = useRef(null);
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -351,7 +350,7 @@
         }
       };
 
-      // 今日所有人的「最新上班 & 最新下班」各一筆（免索引：只 orderBy，再前端挑）
+      // 今日所有人的「最新上班 & 最新下班」各一筆
       const loadTodayLatestIO = async () => {
         if (!db || !user) return;
         const dateKey = ymdLocal(new Date());
@@ -368,7 +367,6 @@
             map.set(d.uid, entry);
           }
           setTodayLatestIO(Array.from(map.values()));
-          // 可不顯示訊息，避免干擾
         } catch (e) {
           console.error('載入今日最新上/下班失敗：', e);
           setStatusMessage(`載入失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
@@ -410,10 +408,7 @@
                                 .filter(x => x.uid === user.uid)
                                 .slice(0, 2);
           setMyTodayLogs(list);
-
-          // 打卡成功後，刷新「今日所有人的最新上/下班」
-          loadTodayLatestIO();
-
+          loadTodayLatestIO(); // 立即刷新今日最新上/下班
         } catch (e) {
           console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
         }
@@ -462,28 +457,7 @@
         return result;
       }, [schedule, staffs, currentDate]);
 
-      /* 列印預覽與 CSV 匯出（月份行事曆） */
-const openPrintPreview = () => {
-  const y = currentDate.getFullYear(), mo = currentDate.getMonth() + 1;
-  const win = window.open('', '_blank');
-  const html = calendarRef.current ? calendarRef.current.innerHTML : '<p>（沒有內容）</p>';
-  win.document.write(`
-    <html><head>
-      <meta charset="utf-8"/>
-      <title>${y}年${String(mo).padStart(2,'0')}月 班表</title>
-      <script src="https://cdn.tailwindcss.com"><\/script>
-    </head>
-    <body class="p-6">
-      <h1 class="text-2xl font-bold mb-4">${y}年${String(mo).padStart(2,'0')}月 班表</h1>
-      ${html}
-      <div class="mt-4 text-sm text-gray-500">＊ 在瀏覽器選單選「列印」即可另存成 PDF。</div>
-    </body></html>
-  `);
-  win.document.close();
-  win.focus();
-};
-
-
+      /* 匯出：CSV（只列出有班的人，排除「休/請假」） */
       const downloadCalendarCSV = () => {
         const y = currentDate.getFullYear(), m = currentDate.getMonth();
         const rows = [['日期','姓名','班別']];
@@ -492,9 +466,7 @@ const openPrintPreview = () => {
           staffs.forEach((name, i)=>{
             const v = schedule[d-1]?.[i] ?? '';
             const t = getShiftText(v);
-            if (!t) return;
-            if (!includeRest && t === '休') return;
-            if (!includeLeave && t === '請假') return;
+            if (!t || t==='休' || t==='請假') return;
             rows.push([`${y}-${pad2(m+1)}-${pad2(d)}`, name, t]);
           });
         }
@@ -506,6 +478,28 @@ const openPrintPreview = () => {
         a.download = `班表_${y}-${String(m+1).padStart(2,'0')}.csv`;
         a.click();
         URL.revokeObjectURL(url);
+      };
+
+      /* 匯出：列印（用新視窗＋DOM 注入 script，避免 </script> 問題） */
+      const printExportModal = () => {
+        const y = currentDate.getFullYear(), mo = currentDate.getMonth() + 1;
+        const win = window.open('', '_blank');
+        win.document.write(`
+          <html><head>
+            <meta charset="utf-8"/>
+            <title>${y}年${String(mo).padStart(2,'0')}月 班表</title>
+          </head>
+          <body class="p-6">
+            <h1 class="text-2xl font-bold mb-4">${y}年${String(mo).padStart(2,'0')}月 班表</h1>
+            <div id="content">${exportRef.current ? exportRef.current.innerHTML : ''}</div>
+            <div class="mt-4 text-sm" style="color:#6b7280">＊ 瀏覽器選單「列印」可另存 PDF。</div>
+          </body></html>
+        `);
+        const s = win.document.createElement('script');
+        s.src = 'https://cdn.tailwindcss.com';
+        win.document.head.appendChild(s);
+        win.document.close();
+        win.focus();
       };
 
       /* 未登入畫面 */
@@ -539,7 +533,7 @@ const openPrintPreview = () => {
         );
       }
 
-      /* 已登入畫面 */
+      /* 已登入畫面（回到舊版主表版面，只多一顆「匯出班表」） */
       const daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
       return (
         <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800 antialiased">
@@ -574,7 +568,7 @@ const openPrintPreview = () => {
             <p className="text-xs text-gray-500 mt-2">＊ 每位員工設定一次即可；打卡會將此姓名寫入紀錄。</p>
           </div>
 
-          {/* 打卡區塊 */}
+          {/* 打卡區塊 + 今日最新上/下班（自動載入，可手動刷新） */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex gap-2">
@@ -589,108 +583,53 @@ const openPrintPreview = () => {
                 }
               </div>
             </div>
-          </div>
 
-          {/* 今日所有人的最新「上班 / 下班」 */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">今日所有人的最新上/下班</h2>
-              <button onClick={loadTodayLatestIO} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
-                重新整理
-              </button>
-            </div>
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="px-3 py-2 text-left">姓名</th>
-                    <th className="px-3 py-2 text-left">帳號</th>
-                    <th className="px-3 py-2 text-left">最新上班</th>
-                    <th className="px-3 py-2 text-left">最新下班</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {todayLatestIO.map(r => (
-                    <tr key={r.uid} className="border-t">
-                      <td className="px-3 py-2">{r.displayName || '未設定'}</td>
-                      <td className="px-3 py-2">{r.email || r.uid}</td>
-                      <td className="px-3 py-2">
-                        {r.inTs
-                          ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
-                              上班 {fmtTime(r.inTs)}
-                            </span>
-                          : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-3 py-2">
-                        {r.outTs
-                          ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">
-                              下班 {fmtTime(r.outTs)}
-                            </span>
-                          : <span className="text-gray-400">—</span>}
-                      </td>
-                    </tr>
-                  ))}
-                  {!todayLatestIO.length && (
-                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（今天尚無資料）</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* 打卡紀錄查詢 */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex flex-col md:flex-row md:items-end gap-3">
-              <div>
-                <label className="text-sm text-gray-600">日期</label>
-                <input type="date" className="block border rounded px-3 py-2"
-                       value={logDate} onChange={e=>setLogDate(e.target.value)} />
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <h2 className="text-lg font-semibold">今日所有人的最新上/下班</h2>
+                <button onClick={loadTodayLatestIO} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">重新整理</button>
               </div>
-              <div>
-                <label className="text-sm text-gray-600">成員</label>
-                <select className="block border rounded px-3 py-2"
-                        value={logUid} onChange={e=>setLogUid(e.target.value)}>
-                  <option value="ALL">全部</option>
-                  {members.map(m => (
-                    <option key={m.uid} value={m.uid}>
-                      {m.displayName || m.email || m.uid}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button onClick={async ()=>{ await (runLogSearch()); }} className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700">
-                查詢打卡紀錄
-              </button>
-            </div>
-
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="px-3 py-2 text-left">時間</th>
-                    <th className="px-3 py-2 text-left">姓名</th>
-                    <th className="px-3 py-2 text-left">帳號</th>
-                    <th className="px-3 py-2 text-left">類型</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map(r => (
-                    <tr key={r.id} className="border-t">
-                      <td className="px-3 py-2">{fmtDateTime(r.ts)}</td>
-                      <td className="px-3 py-2">{r.displayName || '未設定'}</td>
-                      <td className="px-3 py-2">{r.email || r.uid}</td>
-                      <td className="px-3 py-2">{r.type === 'IN' ? '上班' : '下班'}</td>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="px-3 py-2 text-left">姓名</th>
+                      <th className="px-3 py-2 text-left">帳號</th>
+                      <th className="px-3 py-2 text-left">最新上班</th>
+                      <th className="px-3 py-2 text-left">最新下班</th>
                     </tr>
-                  ))}
-                  {!logs.length && (
-                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（目前沒有資料）</td></tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {todayLatestIO.map(r => (
+                      <tr key={r.uid} className="border-t">
+                        <td className="px-3 py-2">{r.displayName || '未設定'}</td>
+                        <td className="px-3 py-2">{r.email || r.uid}</td>
+                        <td className="px-3 py-2">
+                          {r.inTs
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
+                                上班 {fmtTime(r.inTs)}
+                              </span>
+                            : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.outTs
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">
+                                下班 {fmtTime(r.outTs)}
+                              </span>
+                            : <span className="text-gray-400">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                    {!todayLatestIO.length && (
+                      <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（今天尚無資料）</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
-          {/* 排班功能 */}
+          {/* 排班功能（舊版主表） */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex flex-col md:flex-row items-center justify-between gap-3">
               <div className="flex gap-2 w-full md:w-auto">
@@ -716,6 +655,8 @@ const openPrintPreview = () => {
                        className="border rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-green-500"/>
                 <button onClick={handleAddStaff} className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
+                <!-- 匯出班表按鈕（新增的唯一按鍵） -->
+                <button onClick={()=>setExportOpen(true)} className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出班表</button>
               </div>
             </div>
 
@@ -724,7 +665,7 @@ const openPrintPreview = () => {
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格顯示當日裁切後時段；月曆匯出僅顯示「姓名：班別」）</div>
+                <div className="text-gray-500">（表格顯示當日裁切後時段；匯出月曆只顯示「姓名：班別」）</div>
               </div>
             </div>
           </div>
@@ -797,74 +738,81 @@ const openPrintPreview = () => {
             </div>
           </div>
 
-          {/* 月份行事曆預覽（只顯示班別、不含時間） */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mt-6">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <h2 className="text-lg font-semibold">月份行事曆預覽（只顯示班別）</h2>
-              <div className="flex items-center gap-4">
-                <label className="text-sm flex items-center gap-2">
-                  <input type="checkbox" className="h-4 w-4" checked={includeRest} onChange={e=>setIncludeRest(e.target.checked)}/>
-                  包含「休」
-                </label>
-                <label className="text-sm flex items-center gap-2">
-                  <input type="checkbox" className="h-4 w-4" checked={includeLeave} onChange={e=>setIncludeLeave(e.target.checked)}/>
-                  包含「請假」
-                </label>
-                <button onClick={openPrintPreview} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">另開列印版</button>
-                <button onClick={downloadCalendarCSV} className="px-3 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">下載 CSV</button>
+          {/* ===== 匯出班表：彈窗（週一→週日排序） ===== */}
+          {exportOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">
+                    {currentDate.getFullYear()}年{String(currentDate.getMonth()+1).padStart(2,'0')}月 班表（週一→週日）
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button onClick={downloadCalendarCSV}
+                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">
+                      下載
+                    </button>
+                    <button onClick={printExportModal}
+                            className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">
+                      友善列印
+                    </button>
+                    <button onClick={()=>setExportOpen(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">
+                      關閉
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-5 overflow-auto" ref={exportRef}>
+                  {/* 週標題（週一到週日） */}
+                  <div className="grid grid-cols-7 gap-2 text-center text-sm text-gray-600">
+                    {['一','二','三','四','五','六','日'].map(w => (
+                      <div key={w} className="font-semibold">{w}</div>
+                    ))}
+                  </div>
+
+                  {/* 月格子（週一起算） */}
+                  <div className="grid grid-cols-7 gap-2 mt-2">
+                    {(() => {
+                      const y = currentDate.getFullYear(), m = currentDate.getMonth();
+                      const first = new Date(y, m, 1);
+                      const total = getDaysInMonth(y, m);
+                      // 把星期（0=日）轉換為週一起算的 0..6：Mon=0 ... Sun=6
+                      const firstDowMonStart = (first.getDay() + 6) % 7;
+                      const cells = Array.from({length:firstDowMonStart}, ()=>null)
+                        .concat(Array.from({length: total}, (_,i)=> i+1));
+                      while(cells.length % 7 !== 0) cells.push(null);
+
+                      return cells.map((d, idx) => (
+                        <div key={idx} className="min-h-28 border rounded p-2">
+                          {d ? (
+                            <>
+                              <div className="text-right text-gray-500 text-xs">{d}</div>
+                              <div className="mt-1 space-y-1 text-sm">
+                                {(() => {
+                                  const items = staffs.map((name, si) => {
+                                    const v = schedule[d-1]?.[si] ?? '';
+                                    const t = getShiftText(v);
+                                    // 匯出只顯示「有上班的人」，不含休/請假
+                                    if (!t || t==='休' || t==='請假') return null;
+                                    return (
+                                      <div key={name + si} className="truncate">
+                                        <span className="font-medium">{name}</span>：{t}
+                                      </div>
+                                    );
+                                  }).filter(Boolean);
+                                  return items.length ? items : <div className="text-gray-300">—</div>;
+                                })()}
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
               </div>
             </div>
-
-            {/* 週標題 */}
-            <div className="grid grid-cols-7 gap-2 mt-4 text-center text-sm text-gray-600">
-              {['日','一','二','三','四','五','六'].map(w => (
-                <div key={w} className="font-semibold">{w}</div>
-              ))}
-            </div>
-
-            {/* 月格子（對齊週幾起始） */}
-            <div ref={calendarRef} className="grid grid-cols-7 gap-2 mt-2">
-              {(() => {
-                const y = currentDate.getFullYear(), m = currentDate.getMonth();
-                const firstDow = new Date(y, m, 1).getDay();         // 本月 1 號星期幾（0=日）
-                const totalDays = getDaysInMonth(y, m);
-                const cells = Array.from({length:firstDow}, ()=>null)
-                  .concat(Array.from({length: totalDays}, (_,i)=> i+1));
-                while(cells.length % 7 !== 0) cells.push(null);
-
-                return cells.map((d, idx) => (
-                  <div key={idx} className="min-h-28 border rounded p-2">
-                    {d ? (
-                      <>
-                        <div className="text-right text-gray-500 text-xs">{d}</div>
-                        <div className="mt-1 space-y-1 text-sm">
-                          {(() => {
-                            const items = staffs.map((name, si) => {
-                              const v = schedule[d-1]?.[si] ?? '';
-                              const t = getShiftText(v);
-                              if (!t) return null;
-                              if (!includeRest && t === '休') return null;
-                              if (!includeLeave && t === '請假') return null;
-                              return (
-                                <div key={name + si} className="truncate">
-                                  <span className="font-medium">{name}</span>：{t}
-                                </div>
-                              );
-                            }).filter(Boolean);
-                            return items.length ? items : <div className="text-gray-300">—</div>;
-                          })()}
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-                ));
-              })()}
-            </div>
-
-            <div className="mt-3 text-xs text-gray-500">
-              ＊ 僅列出該日有排到班別的人（預設不含「休」與「請假」）。若要列入，勾選上方選項。
-            </div>
-          </div>
+          )}
 
           {confirmOpen && (
             <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50">
