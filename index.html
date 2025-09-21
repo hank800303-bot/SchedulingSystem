@@ -19,7 +19,7 @@
     import {
       getFirestore, doc, setDoc, onSnapshot,
       collection, addDoc, serverTimestamp,
-      query, where, orderBy, limit, getDocs, getDoc
+      query, orderBy, limit, getDocs, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
     // 暴露到全域，讓 Babel 腳本能使用
@@ -27,7 +27,7 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
-      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, getDoc
+      collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, getDoc
     };
   </script>
 
@@ -48,7 +48,7 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot,
-      collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, getDoc
+      collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, getDoc
     } = window.firebase;
 
     /* ====== 常數 ====== */
@@ -85,6 +85,9 @@
       const h = mins/60;
       return (Math.abs(h - Math.round(h)) < 1e-9) ? `${Math.round(h)}小時` : `${(Math.round(h*2)/2).toFixed(1)}小時`;
     };
+    const fmtTime = (ts) => ts?.toDate ? ts.toDate().toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit' }) : '—';
+    const fmtDateTime = (ts) => ts?.toDate ? ts.toDate().toLocaleString('zh-TW', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+
     const getBusinessWindow = (date) => {
       const dow = date.getDay(); // 0=日
       if (dow === 0) return { open: toMin(9,30), close: toMin(21,0) }; // 週日
@@ -155,6 +158,7 @@
       const [logDate, setLogDate] = useState(ymd(new Date()));
       const [logUid, setLogUid] = useState('ALL');
       const [logs, setLogs] = useState([]);
+      const [todayLatest, setTodayLatest] = useState([]); // 每位成員最新 1 筆
 
       // Firebase 初始化 + Auth 監聽
       useEffect(()=>{
@@ -275,10 +279,10 @@
       // 切換班別
       const handleShiftChange = (dayIdx, staffIdx)=>{
         const next=[...schedule];
-        next[dayIdx] = next[dayIdx] || Array(staffs.length).fill('');
-        const cur = next[dayIdx][staffIdx] || '';
+        next[dayIdx] = Array.isArray(next[dayIdx]) ? [...next[dayIdx]] : Array(staffs.length).fill('');
+        const cur = next[dayIdx][staffIdx] ?? '';
         const curText = (typeof cur==='object') ? '請假' : cur;
-        const i = SHIFT_OPTIONS.indexOf(curText);
+        const i = Math.max(0, SHIFT_OPTIONS.indexOf(curText));
         const ni = (i+1) % SHIFT_OPTIONS.length;
         const ns = SHIFT_OPTIONS[ni];
         next[dayIdx][staffIdx] = (ns==='請假')? {shift:'請假', type:'未備註', days:1, notes:''} : ns;
@@ -288,11 +292,12 @@
 
       // 新增/刪除員工
       const handleAddStaff = async ()=>{
-        if(!newStaffName.trim()) return;
-        if(staffs.includes(newStaffName.trim())){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1600); return; }
-        const nextStaffs=[...staffs, newStaffName.trim()];
+        const name = (newStaffName||'').trim();
+        if(!name) return;
+        if(staffs.includes(name)){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1600); return; }
+        const nextStaffs=[...staffs, name];
         setStaffs(nextStaffs);
-        setSchedule(schedule.map(day=> [...day, '']));
+        setSchedule((schedule||[]).map(day=> Array.isArray(day)? [...day, ''] : Array(nextStaffs.length).fill('')));
         setNewStaffName('');
         if(!db || !user) return;
         try{
@@ -301,11 +306,18 @@
           setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
         }catch(e){ console.error(e); setStatusMessage(`新增員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000); }
       };
+
       const handleDeleteStaff = (name)=>{ setStaffToDel(name); setConfirmOpen(true); };
+
       const confirmDeleteStaff = async ()=>{
-        const idx = staffs.indexOf(staffToDel);
-        const nextStaffs = staffs.filter(n=> n!==staffToDel);
-        const nextSched  = schedule.map(day=> day.filter((_,i)=> i!==idx));
+        if (!staffToDel){ setConfirmOpen(false); return; }
+        const idx = staffs.findIndex(n => n === staffToDel);
+        if (idx === -1){
+          setStatusMessage('找不到該員工'); setTimeout(()=>setStatusMessage(''),1600);
+          setConfirmOpen(false); setStaffToDel(null); return;
+        }
+        const nextStaffs = staffs.filter((_, i)=> i !== idx);
+        const nextSched  = (schedule||[]).map(day=> Array.isArray(day) ? day.filter((_,i)=> i!==idx) : []);
         setStaffs(nextStaffs);
         setSchedule(nextSched);
         try{
@@ -315,8 +327,11 @@
             await saveScheduleNow(nextSched);
           }
           setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1600);
-        }catch(e){ console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{ setConfirmOpen(false); setStaffToDel(null); }
+        }catch(e){
+          console.error(e); setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+        }finally{
+          setConfirmOpen(false); setStaffToDel(null); // 自動關閉
+        }
       };
 
       // 打卡（免索引：寫入成功就顯示成功；列表以 orderBy 後前端濾 uid）
@@ -370,83 +385,25 @@
         }
       };
 
-      // 匯出月份行事曆（只顯示 姓名：班別）
-      const exportMonthlyCalendar = ()=>{
-        const y = currentDate.getFullYear();
-        const m = currentDate.getMonth();
-        const days = getDaysInMonth(y,m);
-        const startDow = new Date(y,m,1).getDay(); // 0=日
-
-        const dayItems = Array.from({length:days}, (_,i)=>{
-          const row = schedule[i] || [];
-          const items = [];
-          staffs.forEach((name, idx)=>{
-            const raw = row[idx] || '';
-            const text = (typeof raw==='object' && raw)? '請假' : (raw || '');
-            if (!text || text==='休' || text==='請假') return;
-            items.push(`${name}：${text}`);
-          });
-          return items;
-        });
-
-        const title = `${y}年${m+1}月 班表（工作區：${WORKSPACE_ID}）`;
-        const html = `
-<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>${title}</title>
-<style>
-  body { font-family: 'Noto Sans TC', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial; margin:24px; }
-  h1 { font-size:20px; margin:0 0 12px; }
-  table { width:100%; border-collapse:collapse; }
-  th, td { border:1px solid #ddd; vertical-align:top; padding:8px; }
-  th { background:#f4f6f8; text-align:center; }
-  .date { font-weight:700; margin-bottom:6px; }
-  .empty { background:#fafafa; }
-  @media print { @page { size: A4 landscape; margin: 12mm; } }
-</style></head><body>
-<h1>${title}</h1>
-<table>
-  <thead><tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead>
-  <tbody>
-    ${(()=>{
-      let html=''; let d=1;
-      const cells = startDow + days;
-      const rows = Math.ceil(cells/7);
-      for(let r=0; r<rows; r++){
-        html += '<tr>';
-        for(let c=0; c<7; c++){
-          const cellIndex = r*7+c;
-          if (cellIndex < startDow || d > days){
-            html += '<td class="empty"></td>';
-          } else {
-            const items = dayItems[d-1];
-            html += '<td><div class="date">'+(m+1)+'/'+d+'</div>';
-            if (items.length){
-              html += '<ul style="margin:0; padding-left:18px;">';
-              for(const t of items){ html += '<li>'+t+'</li>'; }
-              html += '</ul>';
-            } else {
-              html += '<div style="color:#999;">（無排班）</div>';
-            }
-            html += '</td>';
-            d++;
+      // 今日所有人的最新打卡（一人一筆）
+      const loadTodayLatest = async () => {
+        if (!db || !user) return;
+        const dateKey = ymd(new Date());
+        try {
+          const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
+          const qy = query(logsRef, orderBy('ts','desc'), limit(1000)); // 免索引：只排序
+          const snap = await getDocs(qy);
+          const map = new Map();
+          for (const docu of snap.docs) {
+            const d = docu.data();
+            if (!map.has(d.uid)) map.set(d.uid, { id: docu.id, ...d }); // 已按時間倒序，第一筆即最新
           }
+          setTodayLatest(Array.from(map.values()));
+          setStatusMessage(`今日最新打卡：${map.size} 人`); setTimeout(()=>setStatusMessage(''), 1200);
+        } catch (e) {
+          console.error('載入今日最新打卡失敗：', e);
+          setStatusMessage(`載入失敗：${e.code || e.message}`); setTimeout(()=>setStatusMessage(''), 2000);
         }
-        html += '</tr>';
-      }
-      return html;
-    })()}
-  </tbody>
-</table>
-</body></html>`;
-        const w = window.open('', '_blank');
-        w.document.open(); w.document.write(html); w.document.close();
-        const tryPrint = ()=>{
-          if (!w || w.closed) return;
-          if (w.document && w.document.readyState === 'complete') {
-            try { w.focus(); w.print(); } catch(e) {}
-          } else { setTimeout(tryPrint, 200); }
-        };
-        tryPrint();
       };
 
       /* 登入/註冊/登出 */
@@ -566,8 +523,47 @@
                 <button onClick={()=>punch('OUT')} className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600">下班打卡</button>
               </div>
               <div className="text-sm text-gray-600">
-                今日我的打卡（最近）：{myTodayLogs.length ? myTodayLogs.map(l => l.type).join('、') : '—'}
+                今日我的打卡（最近）：{
+                  myTodayLogs.length
+                  ? myTodayLogs.map(l => `${l.type==='IN'?'上班':'下班'} ${fmtTime(l.ts)}`).join('、')
+                  : '—'
+                }
               </div>
+            </div>
+          </div>
+
+          {/* 今日所有人的最新打卡 */}
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">今日所有人的最新打卡</h2>
+              <button onClick={loadTodayLatest} className="px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">
+                載入
+              </button>
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="px-3 py-2 text-left">時間</th>
+                    <th className="px-3 py-2 text-left">姓名</th>
+                    <th className="px-3 py-2 text-left">帳號</th>
+                    <th className="px-3 py-2 text-left">類型</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayLatest.map(r => (
+                    <tr key={r.id} className="border-t">
+                      <td className="px-3 py-2">{fmtDateTime(r.ts)}</td>
+                      <td className="px-3 py-2">{r.displayName || '未設定'}</td>
+                      <td className="px-3 py-2">{r.email || r.uid}</td>
+                      <td className="px-3 py-2">{r.type === 'IN' ? '上班' : '下班'}</td>
+                    </tr>
+                  ))}
+                  {!todayLatest.length && (
+                    <tr><td className="px-3 py-4 text-gray-400" colSpan="4">（尚未載入或今天還沒人打卡）</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -610,7 +606,7 @@
                 <tbody>
                   {logs.map(r => (
                     <tr key={r.id} className="border-t">
-                      <td className="px-3 py-2">{r.ts?.toDate ? r.ts.toDate().toLocaleString() : '—'}</td>
+                      <td className="px-3 py-2">{fmtDateTime(r.ts)}</td>
                       <td className="px-3 py-2">{r.displayName || '未設定'}</td>
                       <td className="px-3 py-2">{r.email || r.uid}</td>
                       <td className="px-3 py-2">{r.type === 'IN' ? '上班' : '下班'}</td>
@@ -650,7 +646,6 @@
                        className="border rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-green-500"/>
                 <button onClick={handleAddStaff} className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
-                <button onClick={exportMonthlyCalendar} className="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 whitespace-nowrap">匯出月份行事曆</button>
               </div>
             </div>
 
@@ -676,7 +671,7 @@
                       <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
                         <div className="flex justify-between items-center">
                           <span>{name}</span>
-                          <button onClick={()=>{ setStaffToDel(name); setConfirmOpen(true); }}
+                          <button onClick={()=>handleDeleteStaff(name)}
                                   className="text-red-500 hover:text-red-700" title="刪除">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
@@ -698,7 +693,7 @@
                           {currentDate.getMonth()+1}月{day}號（{dowName}）
                         </td>
                         {staffs.map((_, staffIdx)=>{
-                          const cur = schedule[dayIdx]?.[staffIdx] || '';
+                          const cur = schedule[dayIdx]?.[staffIdx] ?? '';
                           const cls = SHIFT_COLOR[(typeof cur==='object')?'請假':cur] || 'bg-white text-gray-500';
                           return (
                             <td key={staffIdx} className="px-2 py-2 border-r-2 border-gray-300 text-center">
