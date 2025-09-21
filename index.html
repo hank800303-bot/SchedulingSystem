@@ -346,19 +346,21 @@
         const logsRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
 
         // 1) 寫入
-        try {
-          await addDoc(logsRef, {
-            uid: user.uid, email: user.email || '', displayName: myName || '',
-            type, ts: serverTimestamp(), by: 'web', meta: { ua: navigator.userAgent || '' }
-          });
-          setStatusMessage(type === 'IN' ? '上班打卡成功！' : '下班打卡成功！');
-          setTimeout(() => setStatusMessage(''), 1600);
-        } catch (e) {
-          console.error('打卡寫入失敗：', e);
-          setStatusMessage(`打卡失敗：${e.code || e.message}`);
-          setTimeout(() => setStatusMessage(''), 2000);
-          return;
-        }
+       // 2) 更新「今日我的打卡」顯示
+try {
+  const qy = query(logsRef, orderBy('ts','desc'), limit(10));
+  const snap = await getDocs(qy);
+  const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                        .filter(x => x.uid === user.uid)
+                        .slice(0, 2);
+  setMyTodayLogs(list);
+
+  // ✅ 新增這一行：打卡成功後，刷新「今日所有人的最新上/下班」
+  loadTodayLatestIO();
+
+} catch (e) {
+  console.warn('打卡寫入成功，但列表查詢失敗（可建立索引改善）', e);
+}
 
         // 2) 更新「今日我的打卡」顯示
         try {
