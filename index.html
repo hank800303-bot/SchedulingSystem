@@ -51,11 +51,6 @@
       getFirestore, doc, setDoc, onSnapshot, getDoc,
       collection, addDoc, serverTimestamp, getDocs, query, where, limit
     } = window.firebase;
-
-// 第一次打卡時補問姓名（只問一次）
-const [nameModalOpen, setNameModalOpen] = useState(false);
-const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' 或 'OUT'
-
     
     /* ===== 版本與 App 常數 ===== */
     const CODE_VERSION = '20250922-34';
@@ -211,7 +206,9 @@ const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' 或 'OUT
       const [db,setDb] = useState(null);
       const [auth,setAuth] = useState(null);
       const [user,setUser] = useState(null);
-
+      const [nameModalOpen, setNameModalOpen] = useState(false);
+      
+      const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' | 'OUT'
       const [currentDate,setCurrentDate] = useState(new Date());
       const [staffs,setStaffs] = useState([]);
       const [schedule,setSchedule] = useState([]);
@@ -328,18 +325,30 @@ const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' 或 'OUT
       useEffect(()=>{ if(db && user) loadTodayLatestIO(); }, [db,user]);
 
       /* 儲存我的姓名（使用 function 宣告以確保可被 JSX 前置呼叫） */
-      async function saveMyName(){
-        if(!db || !user) return;
-        setSavingName(true);
-        try{
-          const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-          await setDoc(pref, { displayName: myName||'', email:user.email||'', updatedAt:new Date() }, { merge:true });
-          setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''),1200);
-        }catch(e){
-          console.error('save name fail', e);
-          setStatusMessage(`儲存姓名失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{ setSavingName(false); }
-      }
+     async function saveMyName(){
+  if(!db || !user) return;
+  setSavingName(true);
+  try{
+    const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+    await setDoc(pref, { displayName: myName||'', email:user.email||'', updatedAt:new Date() }, { merge:true });
+    setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''),1200);
+
+    // 若是由打卡觸發，儲存後接著打卡
+    if (pendingPunchType) {
+      const type = pendingPunchType;
+      setPendingPunchType(null);
+      setNameModalOpen(false);
+      punch(type);
+      return;
+    }
+    setNameModalOpen(false);
+  }catch(e){
+    console.error('save name fail', e);
+    setStatusMessage(`儲存姓名失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+  }finally{
+    setSavingName(false);
+  }
+}
 
       /* 儲存班表 */
       const sanitizeSchedule = (data)=>
@@ -436,7 +445,7 @@ const handlePunchClick = (type) => {
         const dateKey  = ymdLocal(now);
         const monthKey = ymLocal(now);
         const dailyRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
-        const flatRef  = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat＿logs`);
+        const flatRef  = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
 
         try{
           await addDoc(dailyRef, {
@@ -527,7 +536,7 @@ const handlePunchClick = (type) => {
         setAttOpen(true); setAttLoading(true);
         try{
           const monthKey = ymLocal(currentDate);
-          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat＿logs`);
+          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
           const qy = query(flatRef, where('monthKey','==',monthKey), limit(20000));
           const snap = await getDocs(qy);
 
