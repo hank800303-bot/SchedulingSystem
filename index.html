@@ -866,8 +866,7 @@ const handlePunchClick = (type) => {
             </div>
           )}
 
-          {/* 匯出班表（行事曆，週一→週日） */}
-          {exportOpen && ({nameModalOpen && (
+{nameModalOpen && (
   <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
     <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
       <div className="px-5 py-4 border-b flex items-center justify-between">
@@ -906,6 +905,9 @@ const handlePunchClick = (type) => {
   </div>
 )}
 
+          
+          {/* 匯出班表（行事曆，週一→週日） */}
+          {exportOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
