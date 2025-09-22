@@ -233,6 +233,22 @@
       const [attOpen,setAttOpen] = useState(false);
       const [attLoading,setAttLoading] = useState(false);
       const [attRows,setAttRows] = useState([]);
+      const prevUidRef = useRef(null);
+
+useEffect(() => {
+  const uid = user?.uid || null;
+  if (prevUidRef.current !== uid) {
+    // 清掉上一位使用者留下來的個人狀態
+    setMyName('');           // 姓名輸入框立刻變空
+    setMyTodayLogs([]);      // 我的今日打卡
+    setTodayLatestIO([]);    // 今日最新上/下班列表（避免短暫顯示前一位）
+    setExportOpen(false);    // 關閉匯出彈窗（避免殘留）
+    setAttOpen(false);       // 關閉出勤彙總彈窗
+    setPendingPunchType(null);
+    setNameModalOpen(false);
+  }
+  prevUidRef.current = uid;
+}, [user?.uid]);
       const attRef = useRef(null);
 
       /* Firebase 初始化 */
