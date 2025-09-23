@@ -21,14 +21,14 @@
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
     import {
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, orderBy
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
     window.firebase = {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, orderBy
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit
     };
   </script>
 
@@ -49,11 +49,11 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, orderBy
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit
     } = window.firebase;
-    
+
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-39';
+    const CODE_VERSION = '20250922-38';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -133,8 +133,8 @@
       </>);
     };
 
-    /* === 行事曆 HTML（友善列印新視窗使用） === */
-    function buildCalendarHTML(y, mIndex0, staffs, schedule, mode='compact', myName=''){
+    /* === 行事曆 HTML 產生器（純字串，避免 JSX 內巢狀模板/內嵌 <script>） === */
+    function buildCalendarHTML(y, mIndex0, staffs, schedule){
       const m = mIndex0 + 1;
       const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const total = getDaysInMonth(y, mIndex0);
@@ -151,23 +151,15 @@
         const items = [];
         for(let si=0; si<staffs.length; si++){
           const name = staffs[si];
-          if(mode==='mine' && myName && name!==myName) continue;
-          const v = (schedule?.[d-1]?.[si]) ?? '';
+          const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
           const t = getShiftText(v);
           if(!t || t==='休' || t==='請假') continue;
-          if(mode==='full'){
-            const info = getShiftWindowForDate(new Date(y,mIndex0,d), t);
-            items.push(
-              '<div class="item"><div><span class="name">'+esc(name)+'</span>：'+esc(t)+'</div><div class="time">'+esc(info.label)+'</div></div>'
-            );
-          }else{
-            items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(t)+'</div>');
-          }
+          items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(t)+'</div>');
         }
         return items.length ? items.join('') : '<div class="item empty">—</div>';
       };
 
-      const cellHtml = cells.map(d=>{
+      const cellHtml = cells.map(function(d){
         if(!d) return '<div class="cell"></div>';
         return ''
           + '<div class="cell">'
@@ -177,21 +169,34 @@
       }).join('');
 
       const html =
-'<!doctype html>\n<html lang="zh-TW">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1.0"/>\n' +
+'<!doctype html>\n' +
+'<html lang="zh-TW">\n' +
+'<head>\n' +
+'<meta charset="utf-8"/>\n' +
+'<meta name="viewport" content="width=device-width, initial-scale=1.0"/>\n' +
 '<title>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表（週一→週日）</title>\n' +
-'<style>\n*{box-sizing:border-box}\n@page { size: A4 landscape; margin: 8mm; }\n@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n' +
+'<style>\n' +
+'*{box-sizing:border-box}\n' +
+'@page { size: A4 landscape; margin: 8mm; }\n' +
+'@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n' +
 'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;margin:0;padding:8mm;color:#111;background:#fff}\n' +
-'h1{margin:0 0 6mm;font-size:14pt}\n.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:2mm;color:#6b7280;font-weight:600;text-align:center;font-size:10pt}\n' +
+'h1{margin:0 0 6mm;font-size:14pt}\n' +
+'.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:2mm;color:#6b7280;font-weight:600;text-align:center;font-size:10pt}\n' +
 '.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm}\n' +
-'.cell{min-height:28mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:2mm}\n' +
+'.cell{min-height:30mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:2mm}\n' +
 '.header{display:flex;align-items:center;justify-content:space-between}\n' +
 '.datepill{display:inline-block;font-size:9pt;color:#6b7280;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:0.5mm 2mm}\n' +
 '.item{font-size:10pt;margin-top:1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
-'.item .time{font-size:9pt;color:#6b7280}\n' +
-'.empty{color:#c7c7c7}\n</style>\n</head>\n<body>\n' +
+'.empty{color:#c7c7c7}\n' +
+'</style>\n' +
+'</head>\n' +
+'<body>\n' +
 '<h1>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表（週一→週日）</h1>\n' +
 '<div class="week"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>\n' +
-'<div class="grid">\n' + cellHtml + '\n</div>\n</body>\n</html>';
+'<div class="grid">\n' + cellHtml + '\n</div>\n' +
+'</body>\n' +
+'</html>';
+
       return html;
     }
 
@@ -201,62 +206,35 @@
       const [auth,setAuth] = useState(null);
       const [user,setUser] = useState(null);
 
-      // 角色/權限
-      const [role, setRole] = useState('viewer'); // 'admin' | 'editor' | 'viewer'
-      const canEdit = role==='admin' || role==='editor';
-
-      // 導覽
-      const [tourStep, setTourStep] = useState(0); // 0=off, 1..3 steps
-
-      // 名稱/打卡
       const [nameModalOpen, setNameModalOpen] = useState(false);
-      const [pendingPunchType, setPendingPunchType] = useState(null);
+      const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' | 'OUT'
 
-      // 資料
       const [currentDate,setCurrentDate] = useState(new Date());
       const [staffs,setStaffs] = useState([]);
       const [schedule,setSchedule] = useState([]);
       const [newStaffName,setNewStaffName] = useState('');
-
-      // UI / 訊息
       const [statusMessage,setStatusMessage] = useState('');
       const [error,setError] = useState('');
       const [email,setEmail] = useState(localStorage.getItem('rememberedEmail')||'');
       const [password,setPassword] = useState('');
       const [rememberEmail,setRememberEmail] = useState(!!localStorage.getItem('rememberedEmail'));
 
-      // 刪除員工
       const [confirmOpen,setConfirmOpen] = useState(false);
       const [staffToDel,setStaffToDel] = useState(null);
 
-      // 我的基本資料
       const [myName,setMyName] = useState('');
       const [savingName,setSavingName] = useState(false);
-
-      // 打卡顯示
       const [myTodayLogs,setMyTodayLogs] = useState([]);
       const [todayLatestIO,setTodayLatestIO] = useState([]);
 
-      // 匯出
       const [exportOpen,setExportOpen] = useState(false);
-      const [exportMode, setExportMode] = useState('compact'); // 'compact' | 'full' | 'mine'
       const exportRef = useRef(null);
 
-      // 出勤彙總
       const [attOpen,setAttOpen] = useState(false);
       const [attLoading,setAttLoading] = useState(false);
       const [attRows,setAttRows] = useState([]);
       const attRef = useRef(null);
 
-      // 歷史/還原
-      const [historyOpen, setHistoryOpen] = useState(false);
-      const [historyItems, setHistoryItems] = useState([]);
-
-      // 成員與權限
-      const [membersOpen, setMembersOpen] = useState(false);
-      const [members, setMembers] = useState([]);
-
-      // 切帳號時清理個人狀態
       const prevUidRef = useRef(null);
       useEffect(() => {
         const uid = user?.uid || null;
@@ -268,8 +246,6 @@
           setAttOpen(false);
           setPendingPunchType(null);
           setNameModalOpen(false);
-          setTourStep(0);
-          setRole('viewer');
         }
         prevUidRef.current = uid;
       }, [user?.uid]);
@@ -305,36 +281,19 @@
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
 
-      /* 讀取我的檔案（姓名、角色）。若尚無管理員，第一個人自動成為 admin */
+      /* 讀取我的姓名（無則建立空檔） */
       useEffect(()=>{
         (async ()=>{
           if(!db || !user) return;
           try{
-            const meRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-            const meSnap = await getDoc(meRef);
-            let newRole = 'viewer';
-            if(meSnap.exists()){
-              const d = meSnap.data();
-              setMyName(d.displayName || '');
-              newRole = d.role || 'viewer';
+            const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+            const psnap = await getDoc(pref);
+            if(psnap.exists()){
+              setMyName(psnap.data().displayName || '');
             }else{
-              // 若文件不存在，先建一筆基本
-              await setDoc(meRef, { email:user.email||'', displayName:'', role:'viewer', updatedAt:new Date() }, { merge:true });
+              await setDoc(pref, { email:user.email||'', displayName:'', updatedAt:new Date() }, { merge:true });
             }
-
-            // 檢查是否已有 admin
-            const allSnap = await getDocs(collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members`));
-            const hasAdmin = allSnap.docs.some(x => (x.data()?.role) === 'admin');
-            if(!hasAdmin){
-              await setDoc(meRef, { role:'admin' }, { merge:true });
-              newRole = 'admin';
-            }
-            setRole(newRole);
-
-            // 首次導覽
-            if(!localStorage.getItem('onboard_v1_done')) setTourStep(1);
-
-          }catch(e){ console.warn('load profile/role fail', e); }
+          }catch(e){ console.warn('load profile fail', e); }
         })();
       },[db,user]);
 
@@ -380,16 +339,15 @@
       };
       useEffect(()=>{ if(db && user) loadTodayLatestIO(); }, [db,user]);
 
-      /* 儲存我的姓名 */
+      /* 儲存我的姓名（儲存後如為打卡情境，接續打卡） */
       async function saveMyName(){
         if(!db || !user) return;
         setSavingName(true);
         try{
           const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-          await setDoc(pref, { displayName: myName||'', email:user.email||'', role, updatedAt:new Date() }, { merge:true });
+          await setDoc(pref, { displayName: myName||'', email:user.email||'', updatedAt:new Date() }, { merge:true });
           setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''),1200);
 
-          // 若是由打卡觸發，儲存後接著打卡
           if (pendingPunchType) {
             const type = pendingPunchType;
             setPendingPunchType(null);
@@ -406,22 +364,15 @@
         }
       }
 
-      /* 儲存班表（含歷史快照） */
+      /* 儲存班表 */
       const sanitizeSchedule = (data)=>
         Array.isArray(data) ? data.map(row => Array.isArray(row) ? row.map(v => (v===undefined?'':v)) : []) : [];
       const saveSchedule = debounce(async (scheduleData)=>{
         if(!db || !user) return;
-        if(!canEdit){ setStatusMessage('只有管理員/編輯可修改'); setTimeout(()=>setStatusMessage(''),1500); return; }
         try{
           const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
           const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          const clean = sanitizeSchedule(scheduleData);
-          await setDoc(sref, { schedule: JSON.stringify(clean), lastUpdated:new Date(), lastBy:user.email||user.uid }, { merge:true });
-
-          // 歷史快照
-          const hcol = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}/history`);
-          await addDoc(hcol, { schedule: JSON.stringify(clean), byEmail: user.email||'', byUid:user.uid, at: serverTimestamp() });
-
+          await setDoc(sref, { schedule: JSON.stringify(sanitizeSchedule(scheduleData)), lastUpdated:new Date() }, { merge:true });
           setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''),1200);
         }catch(e){
           console.error('save schedule fail', e);
@@ -430,47 +381,8 @@
       },500);
       const manualSave = ()=> saveSchedule(schedule);
 
-      /* 歷史/還原 */
-      const openHistory = async ()=>{
-        if(!db || !user) return;
-        const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
-        try{
-          const hcol = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}/history`);
-          // 若規則不允許 orderBy 也沒關係，讀完本地排序
-          let items = [];
-          try {
-            const qs = query(hcol, orderBy('at','desc'), limit(20));
-            const snap = await getDocs(qs);
-            items = snap.docs.map(d=>({ id:d.id, ...d.data() }));
-          } catch {
-            const snap = await getDocs(hcol);
-            items = snap.docs.map(d=>({ id:d.id, ...d.data() }))
-              .sort((a,b)=> (b.at?.toMillis?.()||0) - (a.at?.toMillis?.()||0)).slice(0,20);
-          }
-          setHistoryItems(items);
-          setHistoryOpen(true);
-        }catch(e){
-          console.error('load history fail', e);
-          setStatusMessage(`讀取歷史失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }
-      };
-      const restoreHistory = async (item)=>{
-        if(!canEdit){ setStatusMessage('只有管理員/編輯可還原'); setTimeout(()=>setStatusMessage(''),1500); return; }
-        try{
-          const parsed = JSON.parse(item.schedule||'[]');
-          setSchedule(parsed);
-          await new Promise(r=>setTimeout(r,0));
-          await saveSchedule(parsed); // 會再寫入當前版本與歷史
-          setHistoryOpen(false);
-          setStatusMessage('已還原此版本'); setTimeout(()=>setStatusMessage(''),1200);
-        }catch(e){
-          setStatusMessage('還原失敗：格式錯誤'); setTimeout(()=>setStatusMessage(''),2000);
-        }
-      };
-
-      /* 點格子切換班別（權限限制） */
+      /* 點格子切換班別（循環） */
       const handleShiftChange = (dayIndex, staffIndex)=>{
-        if(!canEdit){ setStatusMessage('只有管理員/編輯可修改'); setTimeout(()=>setStatusMessage(''),1200); return; }
         const next = (schedule && schedule.slice()) || [];
         const cols = staffs.length;
         next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
@@ -487,9 +399,8 @@
         saveSchedule(next);
       };
 
-      /* 新增/刪除員工（權限限制） */
+      /* 新增/刪除員工 */
       const handleAddStaff = async ()=>{
-        if(!canEdit){ setStatusMessage('只有管理員/編輯可新增'); setTimeout(()=>setStatusMessage(''),1200); return; }
         const name = (newStaffName||'').trim();
         if(!name) return;
         if(staffs.includes(name)){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1200); return; }
@@ -509,10 +420,7 @@
           setStatusMessage(`新增失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
         }
       };
-      const handleDeleteStaff = (name)=>{
-        if(!canEdit){ setStatusMessage('只有管理員/編輯可刪除'); setTimeout(()=>setStatusMessage(''),1200); return; }
-        setStaffToDel(name); setConfirmOpen(true);
-      };
+      const handleDeleteStaff = (name)=>{ setStaffToDel(name); setConfirmOpen(true); };
       const confirmDeleteStaff = async (name)=>{
         const idx = staffs.findIndex(n=>n===name);
         if(idx===-1){ setConfirmOpen(false); setStaffToDel(null); return; }
@@ -524,7 +432,7 @@
           await setDoc(sref, { names: nextStaffs }, { merge:true });
           const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
           const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          await setDoc(pref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date(), lastBy:user.email||user.uid }, { merge:true });
+          await setDoc(pref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date() }, { merge:true });
           setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
         }catch(e){
           console.error('delete staff fail', e);
@@ -534,7 +442,7 @@
         }
       };
 
-      /* 打卡（每日 + 扁平 mirror） + 防呆 */
+      /* 打卡（每日 + 扁平 mirror） */
       const handlePunchClick = (type) => {
         if (!myName || !myName.trim()) {
           setPendingPunchType(type);
@@ -545,37 +453,16 @@
       };
       const punch = async (type)=>{
         if(!db || !user){ setStatusMessage('尚未登入，無法打卡'); setTimeout(()=>setStatusMessage(''),2000); return; }
-
         const now = new Date();
         const dateKey  = ymdLocal(now);
         const monthKey = ymLocal(now);
-
-        // 防呆：同類型連續、最短 3 分鐘，以及今天已 OUT 再 OUT
-        try{
-          const lref = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
-          const snap = await getDocs(lref);
-          const mine = snap.docs.map(d=>({ id:d.id, ...d.data() }))
-                                .filter(x=>x.uid===user.uid)
-                                .sort((a,b)=> (a.ts?.toMillis?.()||0)-(b.ts?.toMillis?.()||0));
-          const last = mine[mine.length-1];
-          const lastMs = last ? (last.ts?.toMillis?.() || Date.parse(last.clientTime||0)) : 0;
-          const diffMs = last ? (Date.now() - lastMs) : Infinity;
-
-          if(last && last.type===type && diffMs < 3*60*1000){
-            setStatusMessage('操作太頻繁，請稍後再試'); setTimeout(()=>setStatusMessage(''),1600); return;
-          }
-          if(type==='OUT' && last && last.type==='OUT'){
-            setStatusMessage('今天已下班（最新紀錄為 OUT）'); setTimeout(()=>setStatusMessage(''),1600); return;
-          }
-        }catch(e){ /* 讀取失敗不阻擋打卡，但在 console 提示 */ console.warn('precheck punch fail', e); }
-
         const dailyRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance/${dateKey}/logs`);
         const flatRef  = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
 
         try{
           await addDoc(dailyRef, {
             uid:user.uid, email:user.email||'', displayName:myName||'',
-            type, ts: serverTimestamp(), clientTime: now.toISOString(), by:'web', meta:{ ua:navigator.userAgent||'' }
+            type, ts: serverTimestamp(), by:'web', meta:{ ua:navigator.userAgent||'' }
           });
         }catch(e){
           console.error('punch daily fail', e);
@@ -644,10 +531,10 @@
         }
       };
 
-      /* 友善列印（新視窗；A4 橫式單頁，依版型） */
+      /* 友善列印（新視窗；A4 橫式單頁） */
       const printScheduleModal = ()=>{
         const y=currentDate.getFullYear(), m0=currentDate.getMonth();
-        const html = buildCalendarHTML(y, m0, staffs, schedule, exportMode, myName||'');
+        const html = buildCalendarHTML(y, m0, staffs, schedule);
         const win=window.open('','_blank');
         if(!win){ alert('請允許彈出視窗'); return; }
         win.document.write(html);
@@ -717,30 +604,6 @@
         }finally{ setAttLoading(false); }
       };
 
-      /* 成員與權限（僅 admin 顯示） */
-      const openMembers = async ()=>{
-        if(role!=='admin'){ setStatusMessage('只有管理員可管理權限'); setTimeout(()=>setStatusMessage(''),1500); return; }
-        try{
-          const snap = await getDocs(collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members`));
-          const list = snap.docs.map(d=>({ id:d.id, uid:d.id, ...d.data() }));
-          setMembers(list);
-          setMembersOpen(true);
-        }catch(e){
-          setStatusMessage('讀取成員失敗'); setTimeout(()=>setStatusMessage(''),1500);
-        }
-      };
-      const updateMemberRole = async (uid, newRole)=>{
-        try{
-          const mref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${uid}`);
-          await setDoc(mref, { role: newRole, updatedAt:new Date() }, { merge:true });
-          setMembers(ms => ms.map(x=> x.uid===uid ? {...x, role:newRole} : x));
-          if(uid===user.uid) setRole(newRole);
-          setStatusMessage('已更新權限'); setTimeout(()=>setStatusMessage(''),1000);
-        }catch(e){
-          setStatusMessage('更新權限失敗'); setTimeout(()=>setStatusMessage(''),1500);
-        }
-      };
-
       /* 統計（表尾） */
       const stats = useMemo(()=>{
         const result = staffs.reduce((acc,n)=>(acc[n]={totalDays:0,totalHours:0,leaveDays:0}, acc), {});
@@ -772,7 +635,7 @@
               {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+                <input type="email" value={email} onChange={e=>{ setEmail(e.target.value); if(rememberEmail) localStorage.setItem('rememberedEmail', e.target.value||''); }}
                        className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
               </div>
               <div>
@@ -808,7 +671,7 @@
 
       return (
         <div className="min-h-screen p-4">
-          <header className="mb-4">
+          <header className="mb-6">
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-bold text-gray-900">排班系統</h1>
@@ -816,17 +679,8 @@
                   目前登入：{user.email || '（未提供）'} ｜ 工作區：<span className="font-semibold">{WORKSPACE_ID}</span>
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700">版本 {CODE_VERSION}</span>
-                <span className={`text-xs px-2 py-1 rounded ${canEdit?'bg-emerald-100 text-emerald-800':'bg-gray-200 text-gray-700'}`}>
-                  角色：{role}
-                </span>
-                {role==='admin' && (
-                  <button onClick={openMembers}
-                          className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm">
-                    成員與權限
-                  </button>
-                )}
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">版本 {CODE_VERSION}</span>
                 <button onClick={async ()=>{ try{ await signOut(auth); }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); } }}
                         className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
               </div>
@@ -839,36 +693,8 @@
             </div>
           )}
 
-          {/* 首次導覽（3 步驟） */}
-          {tourStep>0 && (
-            <div className="fixed inset-0 bg-black/40 z-[200] flex items-end md:items-center justify-center p-4">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-3">
-                <div className="text-sm text-gray-500">快速導覽 {tourStep}/3</div>
-                <div className="text-lg font-semibold">
-                  {tourStep===1 && '① 設定你的姓名'}
-                  {tourStep===2 && '② 新增員工，或從表格直接點選排班'}
-                  {tourStep===3 && '③ 匯出班表（行事曆），或查看出勤彙總'}
-                </div>
-                <div className="text-gray-600 text-sm leading-relaxed">
-                  {tourStep===1 && '在「我的姓名」輸入框填上你的顯示名稱，打卡與報表會使用這個名字。'}
-                  {tourStep===2 && '用上方輸入框新增員工；主表格中點一下格子即可在各班別間循環切換。'}
-                  {tourStep===3 && '點「匯出班表」可選擇精簡/完整/僅自己三種版型；「出勤彙總」統計每人出勤天數與總時數。'}
-                </div>
-                <div className="flex items-center justify-between">
-                  <button onClick={()=>{ setTourStep(0); localStorage.setItem('onboard_v1_done','1'); }}
-                          className="text-sm text-gray-500 hover:underline">略過</button>
-                  <div className="flex gap-2">
-                    {tourStep>1 && <button onClick={()=>setTourStep(tourStep-1)} className="px-3 py-1.5 bg-gray-100 rounded">上一步</button>}
-                    {tourStep<3 && <button onClick={()=>setTourStep(tourStep+1)} className="px-3 py-1.5 bg-indigo-600 text-white rounded">下一步</button>}
-                    {tourStep===3 && <button onClick={()=>{ setTourStep(0); localStorage.setItem('onboard_v1_done','1'); }} className="px-3 py-1.5 bg-emerald-600 text-white rounded">完成</button>}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* 我的資料（姓名） */}
-          <div className="bg-white rounded-xl shadow-lg p-5 mb-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
             <div className="flex items-end gap-3">
               <div className="flex-1">
                 <label className="block text-sm text-gray-600 mb-1">我的姓名（會出現在打卡與報表）</label>
@@ -884,7 +710,7 @@
           </div>
 
           {/* 打卡 + 今日最新上/下班 */}
-          <div className="bg-white rounded-xl shadow-lg p-5 mb-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex gap-2">
                 <button onClick={()=>handlePunchClick('IN')}  className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600">上班打卡</button>
@@ -940,8 +766,8 @@
             </div>
           </div>
 
-          {/* 控制列（手機 sticky 於頂） */}
-          <div className="bg-white rounded-xl shadow-lg p-5 mb-4 sticky top-0 z-30">
+          {/* 控制列 */}
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
             <div className="flex flex-col md:flex-row items-center justify-between gap-3">
               <div className="flex gap-2 w-full md:w-auto">
                 <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()-1, 1))}
@@ -960,7 +786,6 @@
                 <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()+1, 1))}
                         className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">下一月</button>
               </div>
-
               <div className="flex flex-wrap md:flex-nowrap items-stretch md:items-center gap-2 w-full md:w-auto">
                 <input
                   type="text"
@@ -970,113 +795,85 @@
                   className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
                 <button onClick={handleAddStaff}
-                        disabled={!canEdit}
-                        className={`px-4 py-2 text-white rounded-lg whitespace-nowrap ${canEdit?'bg-green-500 hover:bg-green-600':'bg-gray-300 cursor-not-allowed'}`}>
-                  新增
-                </button>
+                        className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave}
-                        disabled={!canEdit}
-                        className={`px-4 py-2 text-white rounded-lg whitespace-nowrap ${canEdit?'bg-blue-500 hover:bg-blue-600':'bg-gray-300 cursor-not-allowed'}`}>
-                  手動儲存
-                </button>
-
+                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
                 <button onClick={()=>setExportOpen(true)}
-                        className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">
-                  匯出班表
-                </button>
+                        className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出班表</button>
                 <button onClick={openAttendanceSummary}
-                        className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 whitespace-nowrap">
-                  出勤彙總（本月）
-                </button>
-                <button onClick={openHistory}
-                        className={`px-4 py-2 rounded-lg whitespace-nowrap ${canEdit?'bg-purple-600 hover:bg-purple-700 text-white':'bg-gray-200 text-gray-600'}`}
-                        disabled={!canEdit}>
-                  歷史
-                </button>
+                        className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 whitespace-nowrap">出勤彙總（本月）</button>
               </div>
             </div>
 
-            <div className="mt-3 text-xs md:text-sm text-gray-700">
+            <div className="mt-4 text-sm text-gray-700 space-y-1">
               <div className="flex flex-wrap gap-4">
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現，可選「精簡/完整/僅自己」。）</div>
-                {!canEdit && <div className="text-rose-600 font-medium">目前為只讀模式</div>}
+                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現，只顯示「姓名：班別」。）</div>
+              </div>
+              <div className="text-xs text-gray-500">
+                提示：點格子可循環班別（(早)→(早＋午)→(午)→(午＋晚)→(晚)→(休)→(支援樹林)→(請假)）
               </div>
             </div>
           </div>
-                <div className="mt-2 text-sky-700 font-medium">
-                點「格子」即可在班別間循環切換（早)→(早＋午)→(午)→(午＋晚)→(晚)→(休)→(支援樹林)→(請假)→(早)。
-          </div>
-
 
           {/* 主表 */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="min-w-max bg-white rounded-xl shadow-lg overflow-hidden">
               <table className="w-full text-left">
-                <thead className="bg-gray-200 sticky top-[5.25rem] md:top-0 z-10">
+                <thead className="bg-gray-200 sticky top-0 z-10">
                   <tr>
                     <th className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">日期</th>
                     {staffs.map((name, idx)=>(
-  <th
-    key={idx}
-    className="px-2 py-2 border-r-2 border-gray-300 whitespace-nowrap w-[120px] min-w-[120px] md:w-auto md:min-w-0"
-  >
-    <div className="flex flex-col items-start gap-1 md:flex-row md:items-center md:justify-between">
-      <span className="block text-xs md:text-sm truncate max-w-[108px] md:max-w-none">{name}</span>
-      <button
-        onClick={()=>handleDeleteStaff(name)}
-        className="text-red-500 hover:text-red-700 md:ml-2 self-end md:self-auto"
-        title="刪除"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 md:h-4 md:w-4" viewBox="0 0 20 20" fill="currentColor">
-          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
-        </svg>
-      </button>
-    </div>
-  </th>
-))}
-
+                      <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
+                        <div className="flex justify-between items-center">
+                          <span>{name}</span>
+                          <button onClick={()=>handleDeleteStaff(name)}
+                                  className="text-red-500 hover:text-red-700" title="刪除">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0  V8z" clipRule="evenodd"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-  {Array.from({ length: daysInMonthVal }).map((_, dayIdx) => {
-    const day = dayIdx + 1;
-    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
+                  {Array.from({ length: daysInMonthVal }).map((_, dayIdx) => {
+                    const day = dayIdx + 1;
+                    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+                    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
 
-    return (
-      <tr key={dayIdx} className="border-t">
-        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
-          {currentDate.getMonth() + 1}月{day}號（{dowName}）
-        </td>
+                    return (
+                      <tr key={dayIdx} className="border-t">
+                        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
+                          {currentDate.getMonth() + 1}月{day}號（{dowName}）
+                        </td>
 
-        {staffs.map((_, idx) => {
-          const cur = (schedule[dayIdx] && schedule[dayIdx][idx]) || '';
-          const cls =
-            SHIFT_COLOR[(typeof cur === 'object') ? '請假' : getShiftText(cur)] || SHIFT_COLOR[''];
+                        {staffs.map((_, idx) => {
+                          const cur = (schedule[dayIdx] && schedule[dayIdx][idx]) || '';
+                          const cls =
+                            SHIFT_COLOR[(typeof cur === 'object') ? '請假' : getShiftText(cur)] || SHIFT_COLOR[''];
 
-          return (
-            <td
-              key={idx}
-              className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
-            >
-              <div
-                onClick={() => handleShiftChange(dayIdx, idx)}
-                className={`p-1.5 md:p-2 rounded-lg cursor-pointer hover:shadow-md transition text-xs md:text-sm ${cls}`}
-              >
-                {getFullShiftDisplay(cur, date)}
-              </div>
-            </td>
-          );
-        })}
-      </tr>
-    );
-  })}
-</tbody>
-
-
+                          return (
+                            <td
+                              key={idx}
+                              className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
+                            >
+                              <div
+                                onClick={() => handleShiftChange(dayIdx, idx)}
+                                className={`p-1.5 md:p-2 rounded-lg cursor-pointer hover:shadow-md transition text-xs md:text-sm ${cls}`}
+                              >
+                                {getFullShiftDisplay(cur, date)}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot className="bg-gray-200 sticky bottom-0 z-10">
                   <tr>
@@ -1110,7 +907,7 @@
             </div>
           )}
 
-          {/* 第一次打卡姓名補問 */}
+          {/* 第一次使用：姓名彈窗 */}
           {nameModalOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
@@ -1150,7 +947,7 @@
             </div>
           )}
 
-          {/* 匯出班表（行事曆） */}
+          {/* 匯出班表（行事曆，週一→週日） */}
           {exportOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
@@ -1159,15 +956,6 @@
                     {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
                   </h3>
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 text-sm">
-                      <span className="text-gray-600 mr-1">版型：</span>
-                      <button onClick={()=>setExportMode('compact')}
-                              className={`px-2 py-1 rounded ${exportMode==='compact'?'bg-gray-900 text-white':'bg-gray-100'}`}>精簡</button>
-                      <button onClick={()=>setExportMode('full')}
-                              className={`px-2 py-1 rounded ${exportMode==='full'?'bg-gray-900 text-white':'bg-gray-100'}`}>完整</button>
-                      <button onClick={()=>setExportMode('mine')}
-                              className={`px-2 py-1 rounded ${exportMode==='mine'?'bg-gray-900 text-white':'bg-gray-100'}`}>僅自己</button>
-                    </div>
                     <button onClick={downloadCalendarPDF}
                             className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
                     <button onClick={printScheduleModal}
@@ -1177,13 +965,12 @@
                   </div>
                 </div>
 
-                {/* 內容：手機固定最小寬度，允許左右滑；桌機自適應 */}
+                {/* 匯出視窗內容：手機固定最小寬度允許橫向滑動；桌機自適應 */}
                 <div className="p-5 overflow-auto" ref={exportRef}>
                   <div className="w-[1120px] sm:w-auto mx-auto">
                     <div className="grid grid-cols-7 gap-2 text-center text-[11px] sm:text-sm text-gray-600">
                       {['一','二','三','四','五','六','日'].map(w => <div key={w} className="font-semibold">{w}</div>)}
                     </div>
-
                     <div className="grid grid-cols-7 gap-2 mt-2">
                       {(() => {
                         const y = currentDate.getFullYear(), m = currentDate.getMonth();
@@ -1192,7 +979,7 @@
                         const firstDowMonStart = (first.getDay() + 6) % 7; // Mon=0
                         const cells = Array.from({length:firstDowMonStart}, ()=>null)
                                            .concat(Array.from({length: total}, (_,i)=> i+1));
-                        while (cells.length % 7 !== 0) cells.push(null);
+                        while(cells.length % 7 !== 0) cells.push(null);
 
                         return cells.map((d, idx) => (
                           <div key={idx} className="min-h-[5rem] sm:min-h-[7rem] border rounded p-1.5 sm:p-2 bg-white">
@@ -1202,23 +989,12 @@
                                   <span className="inline-block px-1 py-0.5 rounded bg-gray-100 border">{m+1}/{d}</span>
                                   <span></span>
                                 </div>
-                                <div className={`mt-1 ${exportMode==='full'?'space-y-0.5':'space-y-0.5'} text-[11px] sm:text-sm leading-tight`}>
+                                <div className="mt-1 space-y-0.5 sm:space-y-1 text-[11px] sm:text-sm leading-tight">
                                   {(() => {
-                                    const baseStaffs = exportMode==='mine' && myName ? staffs.filter(n=>n===myName) : staffs;
-                                    const items = baseStaffs.map((name, siInBase) => {
-                                      const si = staffs.indexOf(name);
+                                    const items = staffs.map((name, si) => {
                                       const v = schedule[d-1]?.[si] ?? '';
                                       const t = getShiftText(v);
                                       if (!t || t==='休' || t==='請假') return null;
-                                      if (exportMode==='full'){
-                                        const info = getShiftWindowForDate(new Date(y,m,d), t);
-                                        return (
-                                          <div key={name+si} className="truncate">
-                                            <div><span className="font-medium">{name}</span>：{t}</div>
-                                            <div className="text-[10px] text-gray-500">{info.label}</div>
-                                          </div>
-                                        );
-                                      }
                                       return <div key={name+si} className="truncate"><span className="font-medium">{name}</span>：{t}</div>;
                                     }).filter(Boolean);
                                     return items.length ? items : <div className="text-gray-300">—</div>;
@@ -1230,8 +1006,9 @@
                         ));
                       })()}
                     </div>
-
-                    <div className="mt-2 text-center text-xs text-gray-500 sm:hidden">（手機可左右滑動檢視）</div>
+                    <div className="mt-2 text-center text-xs text-gray-500 sm:hidden">
+                      （手機可左右滑動檢視）
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1302,86 +1079,6 @@
                       </tbody>
                     </table>
                   )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 歷史版本 */}
-          {historyOpen && (
-            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[130]">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">
-                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
-                  <h3 className="text-lg font-semibold">班表歷史（最近 20 筆）</h3>
-                  <button onClick={()=>setHistoryOpen(false)} className="px-3 py-1.5 text-sm bg-gray-200 rounded">關閉</button>
-                </div>
-                <div className="p-5 overflow-auto">
-                  {historyItems.length ? (
-                    <ul className="space-y-3">
-                      {historyItems.map((it, idx)=>(
-                        <li key={it.id} className="border rounded-lg p-3 flex items-center justify-between">
-                          <div className="text-sm">
-                            <div className="font-medium">#{idx+1}　{it.byEmail || it.byUid || '—'}</div>
-                            <div className="text-gray-500">{it.at?.toDate ? it.at.toDate().toLocaleString('zh-TW') : '—'}</div>
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={()=>restoreHistory(it)}
-                                    disabled={!canEdit}
-                                    className={`px-3 py-1.5 rounded ${canEdit?'bg-purple-600 text-white hover:bg-purple-700':'bg-gray-200 text-gray-600'}`}>
-                              套用此版本
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-gray-500">沒有歷史資料</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 成員與權限（admin 專用） */}
-          {membersOpen && (
-            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[140]">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">
-                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
-                  <h3 className="text-lg font-semibold">成員與權限</h3>
-                  <button onClick={()=>setMembersOpen(false)} className="px-3 py-1.5 text-sm bg-gray-200 rounded">關閉</button>
-                </div>
-                <div className="p-5 overflow-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="px-3 py-2 text-left">姓名</th>
-                        <th className="px-3 py-2 text-left">帳號</th>
-                        <th className="px-3 py-2 text-left">角色</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {members.map(m=>(
-                        <tr key={m.uid} className="border-t">
-                          <td className="px-3 py-2">{m.displayName || '—'}</td>
-                          <td className="px-3 py-2">{m.email || m.uid}</td>
-                          <td className="px-3 py-2">
-                            <select
-                              value={m.role || 'viewer'}
-                              onChange={(e)=>updateMemberRole(m.uid, e.target.value)}
-                              className="border rounded px-2 py-1"
-                            >
-                              <option value="admin">admin（管理員）</option>
-                              <option value="editor">editor（編輯）</option>
-                              <option value="viewer">viewer（只讀）</option>
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                      {!members.length && (
-                        <tr><td className="px-3 py-4 text-gray-400" colSpan="3">（尚無成員資料）</td></tr>
-                      )}
-                    </tbody>
-                  </table>
                 </div>
               </div>
             </div>
