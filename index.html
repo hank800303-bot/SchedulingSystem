@@ -1041,32 +1041,41 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.from({length: daysInMonthVal}).map((_, dayIdx)=>{
-                    const day = dayIdx + 1;
-                    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
-                    return (
-                      <tr key={dayIdx} className="border-t">
-                        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
-                          {currentDate.getMonth()+1}月{day}號（{dowName}）
-                        </td>
-{staffs.map((_, idx)=>{
-  const cur = (schedule[dayIdx] && schedule[dayIdx][idx]) || '';
-  const cls = SHIFT_COLOR[(typeof cur==='object')?'請假':getShiftText(cur)] || SHIFT_COLOR[''];
-  return (
-    <td
-      key={idx}
-      className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
-    >
-      <div
-        onClick={()=>handleShiftChange(dayIdx, idx)}
-        className={`p-1.5 md:p-2 rounded-lg cursor-pointer hover:shadow-md transition text-xs md:text-sm ${cls}`}
-      >
-        {getFullShiftDisplay(cur, date)}
-      </div>
-    </td>
-  );
-})}
+  {Array.from({ length: daysInMonthVal }).map((_, dayIdx) => {
+    const day = dayIdx + 1;
+    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
+
+    return (
+      <tr key={dayIdx} className="border-t">
+        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
+          {currentDate.getMonth() + 1}月{day}號（{dowName}）
+        </td>
+
+        {staffs.map((_, idx) => {
+          const cur = (schedule[dayIdx] && schedule[dayIdx][idx]) || '';
+          const cls =
+            SHIFT_COLOR[(typeof cur === 'object') ? '請假' : getShiftText(cur)] || SHIFT_COLOR[''];
+
+          return (
+            <td
+              key={idx}
+              className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
+            >
+              <div
+                onClick={() => handleShiftChange(dayIdx, idx)}
+                className={`p-1.5 md:p-2 rounded-lg cursor-pointer hover:shadow-md transition text-xs md:text-sm ${cls}`}
+              >
+                {getFullShiftDisplay(cur, date)}
+              </div>
+            </td>
+          );
+        })}
+      </tr>
+    );
+  })}
+</tbody>
+
 
                 </tbody>
                 <tfoot className="bg-gray-200 sticky bottom-0 z-10">
