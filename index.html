@@ -53,7 +53,7 @@
     } = window.firebase;
     
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-35';
+    const CODE_VERSION = '20250922-36';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -798,10 +798,22 @@ const handlePunchClick = (type) => {
     placeholder="新增員工姓名"
     className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500"
   />
-  <button className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
-  <button className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
-  <button className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出班表</button>
-  <button className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 whitespace-nowrap">出勤彙總（本月）</button>
+  <button onClick={handleAddStaff}
+          className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">
+    新增
+  </button>
+  <button onClick={manualSave}
+          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">
+    手動儲存
+  </button>
+  <button onClick={()=>setExportOpen(true)}
+          className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">
+    匯出班表
+  </button>
+  <button onClick={openAttendanceSummary}
+          className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 whitespace-nowrap">
+    出勤彙總（本月）
+  </button>
 </div>
             </div>
 
