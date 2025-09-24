@@ -334,27 +334,31 @@
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
 
-      /* 讀取我的姓名（與鎖定狀態；無則建立空檔） */
-      useEffect(()=>{
-        (async ()=>{
-          if(!db || !user) return;
-          try{
-            const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-            const psnap = await getDoc(pref);
-            if(psnap.exists()){
-              const data = psnap.data() || {};
-              const dn = data.displayName || '';
-              const locked = data.nameLocked === true || (!!dn);
-              setMyName(dn);
-              setNameLocked(locked);
-            }else{
-              await setDoc(pref, { email:user.email||'', displayName:'', nameLocked:false, updatedAt:new Date() }, { merge:true });
-              setMyName('');
-              setNameLocked(false);
-            }
-          }catch(e){ console.warn('load profile fail', e); }
-        })();
-      },[db,user]);
+    
+      // 即時同步 staffs & schedule
+useEffect(()=>{
+  if(!db || !user) return;
+
+  const y = currentDate.getFullYear();
+  const m = currentDate.getMonth() + 1;
+  const monthId = `${y}-${pad2(m)}`; // ← 修正：宣告成 monthId
+
+  const staffRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+  const schedRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
+
+  const unsubStaff = onSnapshot(staffRef, s=> setStaffs(s.exists() ? (s.data().names||[]) : []));
+  const unsubSched = onSnapshot(schedRef, s=>{
+    if(s.exists() && s.data().schedule){
+      try{ setSchedule(JSON.parse(s.data().schedule)); }
+      catch(e){ console.error('schedule parse error', e); setSchedule([]); }
+    }else{
+      setSchedule([]);
+    }
+  });
+
+  return ()=>{ unsubStaff(); unsubSched(); };
+},[db,user,currentDate]);
+
 
       /* 今日我的打卡（最近兩筆） */
       useEffect(()=>{
