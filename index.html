@@ -127,14 +127,16 @@
       if(!text) return '';
       if(text==='請假' && typeof shift==='object') return '請假';
       const info = getShiftWindowForDate(date, text);
-      return (<>
-        <div className="font-bold">{text}</div>
-        <div className="text-xs">{info.label}</div>
-      </>);
+      return (
+        <>
+          <div className="font-bold">{text}</div>
+          <div className="text-xs">{info.label}</div>
+        </>
+      );
     };
 
-    /* === 行事曆 HTML 產生器（純字串） === */
-    function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
+    /* === 行事曆 HTML 產生器（純字串，避免 JSX 內巢狀/內嵌 <script>） === */
+    function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
       const m = mIndex0 + 1;
       const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const total = getDaysInMonth(y, mIndex0);
@@ -160,16 +162,18 @@
 
           const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
 
-          let line = '<div class="item"><span class="name">'+esc(name)+'</span>：';
-          if(exportmode === 'full'){
+          if (exportmode === 'full') {
             const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
             const short = info.label ? (info.label.split(' (')[0] || '') : '';
-            line += '（'+esc(tDisp)+'）' + (short ? ' '+esc(short) : '');
-          }else{
-            line += esc(tDisp);
+            const line =
+              '<div class="item">'
+                + '<div class="row1"><span class="name">'+esc(name)+'</span> '+esc(tDisp)+'</div>'
+                + (short ? '<div class="row2">'+esc(short)+'</div>' : '')
+              + '</div>';
+            items.push(line);
+          } else {
+            items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(tDisp)+'</div>');
           }
-          line += '</div>';
-          items.push(line);
         }
         return items.length ? items.join('') : '<div class="item empty">—</div>';
       };
@@ -201,14 +205,16 @@
 '.cell{min-height:30mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:2mm}\n' +
 '.header{display:flex;align-items:center;justify-content:space-between}\n' +
 '.datepill{display:inline-block;font-size:9pt;color:#6b7280;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:0.5mm 2mm}\n' +
-'.item{font-size:10pt;margin-top:1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
-'.empty{color:#c7c7c7}\n' +
-'/* 6 週月份縮緊，盡量單頁 A4 */\n' +
+'.item{margin-top:1mm}\n' +
+'.item .row1{font-size:10pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
+'.item .row2{font-size:8.5pt;color:#4b5563;margin-top:0.3mm}\n' +
+'.empty{color:#c7c7c7;font-size:10pt}\n' +
 'body.six-rows h1{margin:0 0 4mm;font-size:12pt}\n' +
 'body.six-rows .week{margin-bottom:1.2mm;font-size:9pt}\n' +
 'body.six-rows .grid{gap:1.6mm}\n' +
 'body.six-rows .cell{min-height:26mm;padding:1.6mm}\n' +
-'body.six-rows .item{font-size:9pt}\n' +
+'body.six-rows .item .row1{font-size:9.2pt}\n' +
+'body.six-rows .item .row2{font-size:8pt}\n' +
 '</style>\n' +
 '</head>\n' +
 '<body class="'+bodyClass+'">\n' +
@@ -832,7 +838,7 @@
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現）</div>
+                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現。）</div>
               </div>
               <div className="text-xs text-gray-500">
                 提示：點格子可循環班別（(早)→(早＋午)→(午)→(午＋晚)→(晚)→(休)→(支援樹林)→(請假)）
@@ -973,40 +979,58 @@
           {exportOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+                {/* Header */}
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
                   <h3 className="text-lg font-semibold">
                     {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
                   </h3>
                   <div className="flex items-center gap-2">
-                    {/* 版本切換 */}
-                    <div className="flex items-center bg-gray-100 rounded-lg overflow-hidden">
+                    {/* 模式切換 */}
+                    <div className="flex bg-gray-100 rounded-lg p-1 text-sm">
                       <button
+                        className={`px-3 py-1.5 rounded ${exportMode==='full' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}
                         onClick={()=>setExportMode('full')}
-                        className={`px-3 py-1.5 text-sm ${exportMode==='full' ? 'bg-white shadow' : 'opacity-70'}`}
-                      >完整版</button>
+                        title="顯示姓名、班別與時段"
+                      >
+                        完整
+                      </button>
                       <button
+                        className={`px-3 py-1.5 rounded ${exportMode==='simple' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}
                         onClick={()=>setExportMode('simple')}
-                        className={`px-3 py-1.5 text-sm ${exportMode==='simple' ? 'bg-white shadow' : 'opacity-70'}`}
-                      >精簡版</button>
+                        title="僅顯示姓名：班別"
+                      >
+                        精簡
+                      </button>
                     </div>
+
                     <button onClick={downloadCalendarPDF}
                             className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
-                    <button onClick={printScheduleModal}
+                    <button onClick={()=>{
+                      const y=currentDate.getFullYear(), m0=currentDate.getMonth();
+                      const html = buildCalendarHTML(y, m0, staffs, schedule, exportMode);
+                      const win=window.open('','_blank');
+                      if(!win){ alert('請允許彈出視窗'); return; }
+                      win.document.write(html);
+                      win.document.close();
+                      win.focus();
+                    }}
                             className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
                     <button onClick={()=>setExportOpen(false)}
                             className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
                   </div>
                 </div>
 
-                {/* 匯出預覽：會依 exportMode 顯示完整版/精簡版 */}
+                {/* Body */}
                 <div className="p-5 overflow-auto" ref={exportRef}>
                   <div className="w-[1120px] sm:w-auto mx-auto">
+                    {/* 星期列 */}
                     <div className="grid grid-cols-7 gap-2 text-center text-[11px] sm:text-sm text-gray-600">
                       {['一','二','三','四','五','六','日'].map(w => (
                         <div key={w} className="font-semibold">{w}</div>
                       ))}
                     </div>
 
+                    {/* 月格 */}
                     <div className="grid grid-cols-7 gap-2 mt-2">
                       {(() => {
                         const y = currentDate.getFullYear(), m = currentDate.getMonth();
@@ -1025,7 +1049,8 @@
                                   <span className="inline-block px-1 py-0.5 rounded bg-gray-100 border">{m+1}/{d}</span>
                                   <span></span>
                                 </div>
-                                <div className="mt-1 space-y-0.5 sm:space-y-1 text-[11px] sm:text-sm leading-tight">
+
+                                <div className="mt-1 space-y-1 text-[11px] sm:text-sm leading-tight">
                                   {(() => {
                                     const items = staffs.map((name, si) => {
                                       const v = schedule[d-1]?.[si] ?? '';
@@ -1033,12 +1058,16 @@
                                       if (!t || t==='休' || t==='請假') return null;
 
                                       const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+
                                       if (exportMode === 'full') {
                                         const info  = getShiftWindowForDate(new Date(y, m, d), t);
                                         const short = info.label ? (info.label.split(' (')[0] || '') : '';
                                         return (
-                                          <div key={name+si} className="truncate">
-                                            <span className="font-medium">{name}</span>：（{tDisp}）{short ? ' '+short : ''}
+                                          <div key={name+si} className="leading-tight">
+                                            <div className="truncate">
+                                              <span className="font-medium">{name}</span> {tDisp}
+                                            </div>
+                                            {short && <div className="text-[10px] sm:text-xs text-gray-600">{short}</div>}
                                           </div>
                                         );
                                       } else {
