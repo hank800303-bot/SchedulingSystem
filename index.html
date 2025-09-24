@@ -53,7 +53,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-39';
+    const CODE_VERSION = '20250922-40';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -133,57 +133,57 @@
       </>);
     };
 
-    /* === 行事曆 HTML 產生器（純字串，避免 JSX 內巢狀模板/內嵌 <script>） === */
-function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
-  const m = mIndex0 + 1;
-  const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const total = getDaysInMonth(y, mIndex0);
-  const first = new Date(y, mIndex0, 1);
-  const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
+    /* === 行事曆 HTML 產生器（純字串） === */
+    function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
+      const m = mIndex0 + 1;
+      const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const total = getDaysInMonth(y, mIndex0);
+      const first = new Date(y, mIndex0, 1);
+      const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
 
-  const cells = [];
-  for(let i=0;i<firstDowMonStart;i++) cells.push(null);
-  for(let d=1; d<=total; d++) cells.push(d);
-  while(cells.length % 7 !== 0) cells.push(null);
+      const cells = [];
+      for(let i=0;i<firstDowMonStart;i++) cells.push(null);
+      for(let d=1; d<=total; d++) cells.push(d);
+      while(cells.length % 7 !== 0) cells.push(null);
 
-  const rows = Math.ceil(cells.length / 7);
-  const bodyClass = rows >= 6 ? 'six-rows' : '';
+      const rows = Math.ceil(cells.length / 7);
+      const bodyClass = rows >= 6 ? 'six-rows' : '';
 
-  const renderDay = (d)=>{
-    if(!d) return '';
-    const items = [];
-    for(let si=0; si<staffs.length; si++){
-      const name = staffs[si];
-      const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
-      const t = getShiftText(v);
-      if(!t || t==='休' || t==='請假') continue;
+      const renderDay = (d)=>{
+        if(!d) return '';
+        const items = [];
+        for(let si=0; si<staffs.length; si++){
+          const name = staffs[si];
+          const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
+          const t = getShiftText(v);
+          if(!t || t==='休' || t==='請假') continue;
 
-      const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+          const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
 
-      let line = '<div class="item"><span class="name">'+esc(name)+'</span>：';
-      if(mode === 'full'){
-        const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
-        const short = info.label ? (info.label.split(' (')[0] || '') : '';
-        line += '（'+esc(tDisp)+'）' + (short ? ' '+esc(short) : '');
-      }else{
-        line += esc(tDisp);
-      }
-      line += '</div>';
-      items.push(line);
-    }
-    return items.length ? items.join('') : '<div class="item empty">—</div>';
-  };
+          let line = '<div class="item"><span class="name">'+esc(name)+'</span>：';
+          if(exportmode === 'full'){
+            const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
+            const short = info.label ? (info.label.split(' (')[0] || '') : '';
+            line += '（'+esc(tDisp)+'）' + (short ? ' '+esc(short) : '');
+          }else{
+            line += esc(tDisp);
+          }
+          line += '</div>';
+          items.push(line);
+        }
+        return items.length ? items.join('') : '<div class="item empty">—</div>';
+      };
 
-  const cellHtml = cells.map(function(d){
-    if(!d) return '<div class="cell"></div>';
-    return ''
-      + '<div class="cell">'
-      +   '<div class="header"><span class="datepill">' + m + '/' + d + '</span><span></span></div>'
-      +   renderDay(d)
-      + '</div>';
-  }).join('');
+      const cellHtml = cells.map(function(d){
+        if(!d) return '<div class="cell"></div>';
+        return ''
+          + '<div class="cell">'
+          +   '<div class="header"><span class="datepill">' + m + '/' + d + '</span><span></span></div>'
+          +   renderDay(d)
+          + '</div>';
+      }).join('');
 
-  const html =
+      const html =
 '<!doctype html>\n' +
 '<html lang="zh-TW">\n' +
 '<head>\n' +
@@ -203,7 +203,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
 '.datepill{display:inline-block;font-size:9pt;color:#6b7280;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:0.5mm 2mm}\n' +
 '.item{font-size:10pt;margin-top:1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
 '.empty{color:#c7c7c7}\n' +
-/* 6 週月份：自動縮緊，盡量塞進單頁 A4 */ 
+'/* 6 週月份縮緊，盡量單頁 A4 */\n' +
 'body.six-rows h1{margin:0 0 4mm;font-size:12pt}\n' +
 'body.six-rows .week{margin-bottom:1.2mm;font-size:9pt}\n' +
 'body.six-rows .grid{gap:1.6mm}\n' +
@@ -218,9 +218,8 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
 '</body>\n' +
 '</html>';
 
-  return html;
-};
-
+      return html;
+    }
 
     /* ===== App ===== */
     function App(){
@@ -252,7 +251,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
       const [exportOpen,setExportOpen] = useState(false);
       const exportRef = useRef(null);
       const [exportMode, setExportMode] = useState('full'); // 'full' | 'simple'
-      
+
       const [attOpen,setAttOpen] = useState(false);
       const [attLoading,setAttLoading] = useState(false);
       const [attRows,setAttRows] = useState([]);
@@ -833,7 +832,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現，只顯示「姓名：班別」。）</div>
+                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現）</div>
               </div>
               <div className="text-xs text-gray-500">
                 提示：點格子可循環班別（(早)→(早＋午)→(午)→(午＋晚)→(晚)→(休)→(支援樹林)→(請假)）
@@ -855,7 +854,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
                           <button onClick={()=>handleDeleteStaff(name)}
                                   className="text-red-500 hover:text-red-700" title="刪除">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0  V8z" clipRule="evenodd"/>
+                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
                             </svg>
                           </button>
                         </div>
@@ -971,87 +970,43 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
           )}
 
           {/* 匯出班表（行事曆，週一→週日） */}
-{exportOpen && (
-  <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
-      <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
-        <h3 className="text-lg font-semibold">
-          {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
-        </h3>
-        <div className="flex items-center gap-2">
-          <button onClick={downloadCalendarPDF}
-                  className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
-          <button onClick={printScheduleModal}
-                  className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
-          <button onClick={()=>setExportOpen(false)}
-                  className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
-        </div>
-      </div>
-
-      <div className="p-5 overflow-auto" ref={exportRef}>
-        <div className="w-[1120px] sm:w-auto mx-auto">
-          <div className="grid grid-cols-7 gap-2 text-center text-[11px] sm:text-sm text-gray-600">
-            {['一','二','三','四','五','六','日'].map(w => (
-              <div key={w} className="font-semibold">{w}</div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-2 mt-2">
-            {(() => {
-              const y = currentDate.getFullYear(), m = currentDate.getMonth();
-              const first = new Date(y, m, 1);
-              const total = getDaysInMonth(y, m);
-              const firstDowMonStart = (first.getDay() + 6) % 7; // Mon=0
-              const cells = Array.from({length:firstDowMonStart}, ()=>null)
-                                 .concat(Array.from({length: total}, (_,i)=> i+1));
-              while (cells.length % 7 !== 0) cells.push(null);
-
-              return cells.map((d, idx) => (
-                <div key={idx} className="min-h-[5rem] sm:min-h-[7rem] border rounded p-1.5 sm:p-2 bg-white">
-                  {d ? (
-                    <>
-                      <div className="flex items-center justify-between text-[10px] sm:text-xs text-gray-500">
-                        <span className="inline-block px-1 py-0.5 rounded bg-gray-100 border">{m+1}/{d}</span>
-                        <span></span>
-                      </div>
-                      <div className="mt-1 space-y-0.5 sm:space-y-1 text-[11px] sm:text-sm leading-tight">
-                        {(() => {
-                          const items = staffs.map((name, si) => {
-                            const v = schedule[d-1]?.[si] ?? '';
-                            const t = getShiftText(v);
-                            if (!t || t==='休' || t==='請假') return null;
-                            return (
-                              <div key={name+si} className="truncate">
-                                <span className="font-medium">{name}</span>：{t}
-                              </div>
-                            );
-                          }).filter(Boolean);
-                          return items.length ? items : <div className="text-gray-300">—</div>;
-                        })()}
-                      </div>
-                    </>
-                  ) : null}
+          {exportOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
+                  <h3 className="text-lg font-semibold">
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    {/* 版本切換 */}
+                    <div className="flex items-center bg-gray-100 rounded-lg overflow-hidden">
+                      <button
+                        onClick={()=>setExportMode('full')}
+                        className={`px-3 py-1.5 text-sm ${exportMode==='full' ? 'bg-white shadow' : 'opacity-70'}`}
+                      >完整版</button>
+                      <button
+                        onClick={()=>setExportMode('simple')}
+                        className={`px-3 py-1.5 text-sm ${exportMode==='simple' ? 'bg-white shadow' : 'opacity-70'}`}
+                      >精簡版</button>
+                    </div>
+                    <button onClick={downloadCalendarPDF}
+                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
+                    <button onClick={printScheduleModal}
+                            className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
+                    <button onClick={()=>setExportOpen(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
+                  </div>
                 </div>
-              ));
-            })()}
-          </div>
 
-          <div className="mt-2 text-center text-xs text-gray-500 sm:hidden">
-            （手機可左右滑動檢視）
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
-
-
-                {/* 匯出視窗內容：手機固定最小寬度允許橫向滑動；桌機自適應 */}
+                {/* 匯出預覽：會依 exportMode 顯示完整版/精簡版 */}
                 <div className="p-5 overflow-auto" ref={exportRef}>
                   <div className="w-[1120px] sm:w-auto mx-auto">
                     <div className="grid grid-cols-7 gap-2 text-center text-[11px] sm:text-sm text-gray-600">
-                      {['一','二','三','四','五','六','日'].map(w => <div key={w} className="font-semibold">{w}</div>)}
+                      {['一','二','三','四','五','六','日'].map(w => (
+                        <div key={w} className="font-semibold">{w}</div>
+                      ))}
                     </div>
+
                     <div className="grid grid-cols-7 gap-2 mt-2">
                       {(() => {
                         const y = currentDate.getFullYear(), m = currentDate.getMonth();
@@ -1060,7 +1015,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
                         const firstDowMonStart = (first.getDay() + 6) % 7; // Mon=0
                         const cells = Array.from({length:firstDowMonStart}, ()=>null)
                                            .concat(Array.from({length: total}, (_,i)=> i+1));
-                        while(cells.length % 7 !== 0) cells.push(null);
+                        while (cells.length % 7 !== 0) cells.push(null);
 
                         return cells.map((d, idx) => (
                           <div key={idx} className="min-h-[5rem] sm:min-h-[7rem] border rounded p-1.5 sm:p-2 bg-white">
@@ -1076,7 +1031,23 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
                                       const v = schedule[d-1]?.[si] ?? '';
                                       const t = getShiftText(v);
                                       if (!t || t==='休' || t==='請假') return null;
-                                      return <div key={name+si} className="truncate"><span className="font-medium">{name}</span>：{t}</div>;
+
+                                      const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+                                      if (exportMode === 'full') {
+                                        const info  = getShiftWindowForDate(new Date(y, m, d), t);
+                                        const short = info.label ? (info.label.split(' (')[0] || '') : '';
+                                        return (
+                                          <div key={name+si} className="truncate">
+                                            <span className="font-medium">{name}</span>：（{tDisp}）{short ? ' '+short : ''}
+                                          </div>
+                                        );
+                                      } else {
+                                        return (
+                                          <div key={name+si} className="truncate">
+                                            <span className="font-medium">{name}</span>：{tDisp}
+                                          </div>
+                                        );
+                                      }
                                     }).filter(Boolean);
                                     return items.length ? items : <div className="text-gray-300">—</div>;
                                   })()}
@@ -1087,6 +1058,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode='full'){
                         ));
                       })()}
                     </div>
+
                     <div className="mt-2 text-center text-xs text-gray-500 sm:hidden">
                       （手機可左右滑動檢視）
                     </div>
