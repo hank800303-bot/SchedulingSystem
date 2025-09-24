@@ -53,7 +53,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-40';
+    const CODE_VERSION = '20250922-41';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -66,18 +66,22 @@
       appId: "1:217165082111:web:549c98dd09589029918bca"
     };
 
-    const SHIFT_OPTIONS = ['早班','早+午班','午班','午+晚班','晚班','休','支援樹林','請假'];
-    const SHIFT_COLOR = {
-      '早班':'bg-blue-200 text-blue-800',
-      '早+午班':'bg-indigo-200 text-indigo-800',
-      '午班':'bg-teal-200 text-teal-800',
-      '午+晚班':'bg-purple-200 text-purple-800',
-      '晚班':'bg-red-200 text-red-800',
-      '休':'bg-gray-300 text-gray-800',
-      '請假':'bg-rose-200 text-rose-800',
-      '支援樹林':'bg-lime-200 text-lime-800',
-      '': 'bg-white text-gray-500'
-    };
+   // 班別循環（最後的 '' 代表空白）
+const SHIFT_OPTIONS = ['早班','早+午班','午班','午+晚班','晚班','全天','休','支援樹林','請假',''];
+
+const SHIFT_COLOR = {
+  '早班':'bg-blue-200 text-blue-800',
+  '早+午班':'bg-indigo-200 text-indigo-800',
+  '午班':'bg-teal-200 text-teal-800',
+  '午+晚班':'bg-purple-200 text-purple-800',
+  '晚班':'bg-red-200 text-red-800',
+  '全天':'bg-cyan-200 text-cyan-800',
+  '休':'bg-gray-300 text-gray-800',
+  '請假':'bg-rose-200 text-rose-800',
+  '支援樹林':'bg-lime-200 text-lime-800',
+  '': 'bg-white text-gray-500'
+};
+
 
     /* ===== 工具與時間規則 ===== */
     const toMin = (h,m=0)=> h*60+m;
@@ -113,6 +117,7 @@
         case '午班':    target={start:toMin(13,0), end:toMin(17,0)};   break;
         case '午+晚班': target={start:toMin(13,0), end:close};         break;
         case '晚班':    target={start:toMin(16,0), end:close};         break;
+        case '全天':    target={start:open,        end:close};         break;  
         default:        target={start:open,        end:open};
       }
       const { start, end } = cap(target.start, target.end);
@@ -845,7 +850,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
                 <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現。）</div>
               </div>
               <div className="text-xs text-gray-500">
-                提示：點格子可循環班別（(早)→(早＋午)→(午)→(午＋晚)→(晚)→(休)→(支援樹林)→(請假)）
+                提示：點格子可循環班別（([早]→[早＋午]→[午]→[午＋晚]→[晚]→[休]→[支援樹林]→[請假]→[空白]）
               </div>
             </div>
           </div>
