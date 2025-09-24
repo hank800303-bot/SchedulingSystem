@@ -136,58 +136,60 @@
     };
 
     /* === 行事曆 HTML 產生器（純字串，避免 JSX 內巢狀/內嵌 <script>） === */
-    function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
-      const m = mIndex0 + 1;
-      const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const total = getDaysInMonth(y, mIndex0);
-      const first = new Date(y, mIndex0, 1);
-      const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
+    /* === 行事曆 HTML 產生器（友善列印 / 新視窗）=== */
+/* 直接覆蓋原本的 buildCalendarHTML */
+function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
+  const m = mIndex0 + 1;
+  const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const total = getDaysInMonth(y, mIndex0);
+  const first = new Date(y, mIndex0, 1);
+  const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
 
-      const cells = [];
-      for(let i=0;i<firstDowMonStart;i++) cells.push(null);
-      for(let d=1; d<=total; d++) cells.push(d);
-      while(cells.length % 7 !== 0) cells.push(null);
+  const cells = [];
+  for(let i=0;i<firstDowMonStart;i++) cells.push(null);
+  for(let d=1; d<=total; d++) cells.push(d);
+  while(cells.length % 7 !== 0) cells.push(null);
 
-      const rows = Math.ceil(cells.length / 7);
-      const bodyClass = rows >= 6 ? 'six-rows' : '';
+  const rows = Math.ceil(cells.length / 7);
+  const bodyClass = rows >= 6 ? 'six-rows' : '';
 
-      const renderDay = (d)=>{
-        if(!d) return '';
-        const items = [];
-        for(let si=0; si<staffs.length; si++){
-          const name = staffs[si];
-          const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
-          const t = getShiftText(v);
-          if(!t || t==='休' || t==='請假') continue;
+  const renderDay = (d)=>{
+    if(!d) return '';
+    const items = [];
+    for(let si=0; si<staffs.length; si++){
+      const name = staffs[si];
+      const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
+      const t = getShiftText(v);
+      if(!t || t==='休' || t==='請假') continue;
 
-          const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+      const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
 
-          if (exportmode === 'full') {
-            const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
-            const short = info.label ? (info.label.split(' (')[0] || '') : '';
-            const line =
-              '<div class="item">'
-                + '<div class="row1"><span class="name">'+esc(name)+'</span> '+esc(tDisp)+'</div>'
-                + (short ? '<div class="row2">'+esc(short)+'</div>' : '')
-              + '</div>';
-            items.push(line);
-          } else {
-            items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(tDisp)+'</div>');
-          }
-        }
-        return items.length ? items.join('') : '<div class="item empty">—</div>';
-      };
-
-      const cellHtml = cells.map(function(d){
-        if(!d) return '<div class="cell"></div>';
-        return ''
-          + '<div class="cell">'
-          +   '<div class="header"><span class="datepill">' + m + '/' + d + '</span><span></span></div>'
-          +   renderDay(d)
+      if (exportmode === 'full') {
+        const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
+        const short = info.label ? (info.label.split(' (')[0] || '') : '';
+        const line =
+          '<div class="item">'
+            + '<div class="row1"><span class="name">'+esc(name)+'</span> '+esc(tDisp)+'</div>'
+            + (short ? '<div class="row2">'+esc(short)+'</div>' : '')
           + '</div>';
-      }).join('');
+        items.push(line);
+      } else {
+        items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(tDisp)+'</div>');
+      }
+    }
+    return items.length ? items.join('') : '<div class="item empty">—</div>';
+  };
 
-      const html =
+  const cellHtml = cells.map(function(d){
+    if(!d) return '<div class="cell"></div>';
+    return ''
+      + '<div class="cell">'
+      +   '<div class="header"><span class="datepill">' + m + '/' + d + '</span><span></span></div>'
+      +   renderDay(d)
+      + '</div>';
+  }).join('');
+
+  const html =
 '<!doctype html>\n' +
 '<html lang="zh-TW">\n' +
 '<head>\n' +
@@ -199,7 +201,9 @@
 '@page { size: A4 landscape; margin: 8mm; }\n' +
 '@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n' +
 'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;margin:0;padding:8mm;color:#111;background:#fff}\n' +
-'h1{margin:0 0 6mm;font-size:14pt}\n' +
+/* ↓↓↓ 這裡調小抬頭字級與間距 ↓↓↓ */
+'h1{margin:0 0 4mm;font-size:11.5pt}\n' +
+/* ↑↑↑ */
 '.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:2mm;color:#6b7280;font-weight:600;text-align:center;font-size:10pt}\n' +
 '.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm}\n' +
 '.cell{min-height:30mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:2mm}\n' +
@@ -209,7 +213,8 @@
 '.item .row1{font-size:10pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
 '.item .row2{font-size:8.5pt;color:#4b5563;margin-top:0.3mm}\n' +
 '.empty{color:#c7c7c7;font-size:10pt}\n' +
-'body.six-rows h1{margin:0 0 4mm;font-size:12pt}\n' +
+/* 6 週月份：再縮一點，讓 A4 更容易塞下 */
+'body.six-rows h1{margin:0 0 3mm;font-size:10.5pt}\n' +
 'body.six-rows .week{margin-bottom:1.2mm;font-size:9pt}\n' +
 'body.six-rows .grid{gap:1.6mm}\n' +
 'body.six-rows .cell{min-height:26mm;padding:1.6mm}\n' +
@@ -224,8 +229,8 @@
 '</body>\n' +
 '</html>';
 
-      return html;
-    }
+  return html;
+}
 
     /* ===== App ===== */
     function App(){
