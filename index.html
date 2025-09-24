@@ -140,7 +140,7 @@ const SHIFT_COLOR = {
       );
     };
 
-   /* === 行事曆 HTML 產生器（友善列印 / 新視窗）=== */
+/* === 行事曆 HTML 產生器（友善列印 / 新視窗）=== */
 /* 直接覆蓋原本的 buildCalendarHTML */
 function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
   const m = mIndex0 + 1;
@@ -149,14 +149,17 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
   const first = new Date(y, mIndex0, 1);
   const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
 
+  // 建 7xN 方格
   const cells = [];
   for(let i=0;i<firstDowMonStart;i++) cells.push(null);
   for(let d=1; d<=total; d++) cells.push(d);
   while(cells.length % 7 !== 0) cells.push(null);
 
+  // 判斷是否為 6 週月份（需要更緊）
   const rows = Math.ceil(cells.length / 7);
   const bodyClass = rows >= 6 ? 'six-rows' : '';
 
+  // 產生日內容
   const renderDay = (d)=>{
     if(!d) return '';
     const items = [];
@@ -166,9 +169,11 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
       const t = getShiftText(v);
       if(!t || t==='休' || t==='請假') continue;
 
+      // 視覺：把 + 換成全形＋以避免看花
       const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
 
       if (exportmode === 'full') {
+        // 完整版：第 1 行「姓名 班別」、第 2 行「時段（小字、深灰）」
         const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
         const short = info.label ? (info.label.split(' (')[0] || '') : '';
         const line =
@@ -178,6 +183,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
           + '</div>';
         items.push(line);
       } else {
+        // 精簡版：姓名：班別
         items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(tDisp)+'</div>');
       }
     }
@@ -199,35 +205,36 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
 '<head>\n' +
 '<meta charset="utf-8"/>\n' +
 '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>\n' +
-'<title>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表（週一→週日）</title>\n' +
+'<title>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表</title>\n' + // ← 移除（週一→週日）
 '<style>\n' +
 '*{box-sizing:border-box}\n' +
 '@page { size: A4 landscape; margin: 8mm; }\n' +
 '@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n' +
 'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;margin:0;padding:8mm;color:#111;background:#fff}\n' +
-/* ↓↓↓ 這裡調小抬頭字級與間距 ↓↓↓ */
-'h1{margin:0 0 4mm;font-size:11.5pt}\n' +
-/* ↑↑↑ */
-'.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:2mm;color:#6b7280;font-weight:600;text-align:center;font-size:10pt}\n' +
-'.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm}\n' +
-'.cell{min-height:30mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:2mm}\n' +
+/* 抬頭字級再微縮，壓低間距 */
+'h1{margin:0 0 3.5mm;font-size:11pt}\n' +
+/* 星期列：略縮字級與間距，且避免其後立即換頁 */
+'.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:1.6mm;color:#6b7280;font-weight:600;text-align:center;font-size:9.5pt;break-after:avoid-page;page-break-after:avoid}\n' +
+/* 月格：略縮 gap，允許頁面內分割 */
+'.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1.8mm;break-inside:auto;page-break-inside:auto}\n' +
+'.cell{min-height:28.5mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:1.8mm}\n' +
 '.header{display:flex;align-items:center;justify-content:space-between}\n' +
 '.datepill{display:inline-block;font-size:9pt;color:#6b7280;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:0.5mm 2mm}\n' +
 '.item{margin-top:1mm}\n' +
-'.item .row1{font-size:10pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
-'.item .row2{font-size:8.5pt;color:#4b5563;margin-top:0.3mm}\n' +
+'.item .row1{font-size:9.8pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
+'.item .row2{font-size:8.4pt;color:#4b5563;margin-top:0.3mm}\n' +
 '.empty{color:#c7c7c7;font-size:10pt}\n' +
-/* 6 週月份：再縮一點，讓 A4 更容易塞下 */
+/* 6 週月份：再緊一點以塞進單頁 */
 'body.six-rows h1{margin:0 0 3mm;font-size:10.5pt}\n' +
 'body.six-rows .week{margin-bottom:1.2mm;font-size:9pt}\n' +
-'body.six-rows .grid{gap:1.6mm}\n' +
-'body.six-rows .cell{min-height:26mm;padding:1.6mm}\n' +
+'body.six-rows .grid{gap:1.4mm}\n' +
+'body.six-rows .cell{min-height:25.5mm;padding:1.6mm}\n' +
 'body.six-rows .item .row1{font-size:9.2pt}\n' +
 'body.six-rows .item .row2{font-size:8pt}\n' +
 '</style>\n' +
 '</head>\n' +
 '<body class="'+bodyClass+'">\n' +
-'<h1>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表（週一→週日）</h1>\n' +
+'<h1>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表</h1>\n' +
 '<div class="week"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>\n' +
 '<div class="grid">\n' + cellHtml + '\n</div>\n' +
 '</body>\n' +
@@ -847,10 +854,9 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
                 <div>週一～週五：09:00–22:00</div>
                 <div>週六：09:00–21:00</div>
                 <div>週日：09:30–21:00</div>
-                <div className="text-gray-500">（表格依當日營業窗口裁切；匯出班表以行事曆呈現。）</div>
               </div>
               <div className="text-xs text-gray-500">
-                提示：點格子可循環班別（([早]→[早＋午]→[午]→[午＋晚]→[晚]→[休]→[支援樹林]→[請假]→[空白]）
+                提示：點格子可循環班別[早]→[早＋午]→[午]→[午＋晚]→[晚]→[休]→[支援樹林]→[請假]→[空白]
               </div>
             </div>
           </div>
