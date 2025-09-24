@@ -53,7 +53,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-41';
+    const CODE_VERSION = '20250922-42';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
 
@@ -93,6 +93,17 @@ const SHIFT_COLOR = {
     const ymdLocal = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     const ymLocal  = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}`;
     const fmtTime = (ts)=> (ts && ts.toDate) ? ts.toDate().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : '—';
+    // YYYY/MM/DD HH:mm
+    const fmtYMDHM = (ts)=>{
+    const d = (ts && ts.toDate) ? ts.toDate() : (ts instanceof Date ? ts : null);
+    if(!d) return '—';
+    const y = d.getFullYear();
+    const m = pad2(d.getMonth()+1);
+    const da = pad2(d.getDate());
+    const hh = pad2(d.getHours());
+    const mm = pad2(d.getMinutes());
+     return `${y}/${m}/${da} ${hh}:${mm}`;
+   };
     const debounce = (fn,delay=500)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay);} };
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
     const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
@@ -262,6 +273,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
       const [password,setPassword] = useState('');
       const [rememberEmail,setRememberEmail] = useState(!!localStorage.getItem('rememberedEmail'));
 
+      const [nameLocked, setNameLocked] = useState(false);      
       const [confirmOpen,setConfirmOpen] = useState(false);
       const [staffToDel,setStaffToDel] = useState(null);
 
@@ -325,21 +337,29 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
 
-      /* 讀取我的姓名（無則建立空檔） */
-      useEffect(()=>{
-        (async ()=>{
-          if(!db || !user) return;
-          try{
-            const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-            const psnap = await getDoc(pref);
-            if(psnap.exists()){
-              setMyName(psnap.data().displayName || '');
-            }else{
-              await setDoc(pref, { email:user.email||'', displayName:'', updatedAt:new Date() }, { merge:true });
-            }
-          }catch(e){ console.warn('load profile fail', e); }
-        })();
-      },[db,user]);
+/* 讀取我的姓名（與鎖定狀態；無則建立空檔） */
+useEffect(()=>{
+  (async ()=>{
+    if(!db || !user) return;
+    try{
+      const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+      const psnap = await getDoc(pref);
+      if(psnap.exists()){
+        const data = psnap.data() || {};
+        const dn = data.displayName || '';
+        // 若沒有 nameLocked，但已經有 displayName，也視為鎖定（向後相容）
+        const locked = data.nameLocked === true || (!!dn);
+        setMyName(dn);
+        setNameLocked(locked);
+      }else{
+        await setDoc(pref, { email:user.email||'', displayName:'', nameLocked:false, updatedAt:new Date() }, { merge:true });
+        setMyName('');
+        setNameLocked(false);
+      }
+    }catch(e){ console.warn('load profile fail', e); }
+  })();
+},[db,user]);
+
 
       /* 今日我的打卡（最近兩筆） */
       useEffect(()=>{
@@ -383,30 +403,52 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
       };
       useEffect(()=>{ if(db && user) loadTodayLatestIO(); }, [db,user]);
 
-      /* 儲存我的姓名（儲存後如為打卡情境，接續打卡） */
-      async function saveMyName(){
-        if(!db || !user) return;
-        setSavingName(true);
-        try{
-          const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-          await setDoc(pref, { displayName: myName||'', email:user.email||'', updatedAt:new Date() }, { merge:true });
-          setStatusMessage('姓名已儲存'); setTimeout(()=>setStatusMessage(''),1200);
+/* 儲存我的姓名（首次儲存後即鎖定；若已鎖定則不允許變更） */
+async function saveMyName(){
+  if(!db || !user) return;
 
-          if (pendingPunchType) {
-            const type = pendingPunchType;
-            setPendingPunchType(null);
-            setNameModalOpen(false);
-            punch(type);
-            return;
-          }
-          setNameModalOpen(false);
-        }catch(e){
-          console.error('save name fail', e);
-          setStatusMessage(`儲存姓名失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
-        }finally{
-          setSavingName(false);
-        }
-      }
+  if(nameLocked && (myName || '').trim()){
+    setStatusMessage('姓名已鎖定，無法變更'); setTimeout(()=>setStatusMessage(''),1600);
+    setNameModalOpen(false);
+    setPendingPunchType(null);
+    return;
+  }
+  const finalName = (myName || '').trim();
+  if(!finalName){
+    setStatusMessage('請先輸入姓名'); setTimeout(()=>setStatusMessage(''),1600);
+    return;
+  }
+
+  setSavingName(true);
+  try{
+    const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+    await setDoc(pref, {
+      displayName: finalName,
+      email: user.email||'',
+      nameLocked: true,              // ← 關鍵：存檔後鎖定
+      updatedAt: new Date()
+    }, { merge:true });
+
+    setMyName(finalName);
+    setNameLocked(true);
+    setStatusMessage('姓名已儲存並鎖定'); setTimeout(()=>setStatusMessage(''),1200);
+
+    // 若是由打卡觸發，儲存後接著打卡
+    if (pendingPunchType) {
+      const type = pendingPunchType;
+      setPendingPunchType(null);
+      setNameModalOpen(false);
+      punch(type);
+      return;
+    }
+    setNameModalOpen(false);
+  }catch(e){
+    console.error('save name fail', e);
+    setStatusMessage(`儲存姓名失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+  }finally{
+    setSavingName(false);
+  }
+}
 
       /* 儲存班表 */
       const sanitizeSchedule = (data)=>
@@ -506,7 +548,7 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
         try{
           await addDoc(dailyRef, {
             uid:user.uid, email:user.email||'', displayName:myName||'',
-            type, ts: serverTimestamp(), by:'web', meta:{ ua:navigator.userAgent||'' }
+            type, ts: serverTimestamp(), dateKey, by:'web', meta:{ ua:navigator.userAgent||'' }
           });
         }catch(e){
           console.error('punch daily fail', e);
@@ -738,20 +780,33 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
           )}
 
           {/* 我的資料（姓名） */}
-          <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label className="block text-sm text-gray-600 mb-1">我的姓名（會出現在打卡與報表）</label>
-                <input className="w-full border rounded px-3 py-2" value={myName}
-                       onChange={e=>setMyName(e.target.value)} placeholder="例如：王小明"/>
-              </div>
-              <button onClick={saveMyName}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-60"
-                      disabled={savingName}>
-                {savingName ? '儲存中…' : '儲存姓名'}
-              </button>
-            </div>
-          </div>
+         <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
+  <div className="flex items-end gap-3">
+    <div className="flex-1">
+      <label className="block text-sm text-gray-600 mb-1">
+        我的姓名（會出現在打卡與報表）
+        {nameLocked && <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-gray-100 border text-gray-600 align-middle">已鎖定</span>}
+      </label>
+      <input
+        className={`w-full border rounded px-3 py-2 ${nameLocked ? 'bg-gray-50 text-gray-700 cursor-not-allowed' : ''}`}
+        value={myName}
+        onChange={e=>!nameLocked && setMyName(e.target.value)}
+        placeholder="例如：王小明"
+        disabled={nameLocked}
+      />
+    </div>
+
+    <button
+      onClick={saveMyName}
+      className={`px-4 py-2 rounded text-white ${nameLocked ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-60`}
+      disabled={savingName || nameLocked}
+      title={nameLocked ? '姓名已鎖定，無法變更' : '儲存姓名'}
+    >
+      {nameLocked ? '已鎖定' : (savingName ? '儲存中…' : '儲存姓名')}
+    </button>
+  </div>
+</div>
+
 
           {/* 打卡 + 今日最新上/下班 */}
           <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
@@ -761,11 +816,12 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
                 <button onClick={()=>handlePunchClick('OUT')} className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600">下班打卡</button>
               </div>
               <div className="text-sm text-gray-600">
-                今日我的打卡（最近）：{
-                  myTodayLogs.length
-                    ? myTodayLogs.map(l => `${l.type==='IN'?'上班':'下班'} ${fmtTime(l.ts)}`).join('、')
-                    : '—'
-                }
+                今天打卡紀錄：{
+  myTodayLogs.length
+    ? myTodayLogs.map(l => `${l.type==='IN'?'上班打卡':'下班打卡'} ${fmtYMDHM(l.ts)}`).join('｜')
+    : '—'
+}
+
               </div>
             </div>
 
@@ -791,12 +847,12 @@ function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
                         <td className="px-3 py-2">{r.email || r.uid}</td>
                         <td className="px-3 py-2">
                           {r.inTs
-                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">上班 {fmtTime(r.inTs)}</span>
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">上班 {fmtYMDHM(r.inTs)}</span>
                             : <span className="text-gray-400">—</span>}
                         </td>
                         <td className="px-3 py-2">
                           {r.outTs
-                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">下班 {fmtTime(r.outTs)}</span>
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">下班 {fmtYMDHM(r.outTs)}</span>
                             : <span className="text-gray-400">—</span>}
                         </td>
                       </tr>
