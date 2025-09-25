@@ -630,7 +630,7 @@
         try{
           const monthKey = ymLocal(currentDate);
           const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(20000));
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
           const snap = await getDocs(qy);
 
           const byUid = new Map();
@@ -693,7 +693,7 @@
         try {
           const monthKey = ymLocal(currentDate);
           const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(20000));
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
           const snap = await getDocs(qy);
 
           const rows = snap.docs.map(d => {
