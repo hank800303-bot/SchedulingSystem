@@ -440,24 +440,25 @@
       },500);
       const manualSave = ()=> saveSchedule(schedule);
 
-      /* 點格子切換班別（循環） */
-      const handleShiftChange = (dayIndex, staffIndex)=>{
-        const next = (schedule && schedule.slice()) || [];
-        const cols = staffs.length;
-        next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
+     // 點格子切換班別（循環）
+const handleShiftChange = (dayIndex, staffIndex) => {
+  const next = (schedule && schedule.slice()) || [];
+  const cols = staffs.length;
+  next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
-        const cur = next[dayIndex][staffIndex] || '';
-        CurText = (typeof cur === 'object') ? '請假' : cur; // 變數名無需導出
-        const i = SHIFT_OPTIONS.indexOf(CurText);
-        const nextText = SHIFT_OPTIONS[(i+1)%SHIFT_OPTIONS.length];
+  const cur = next[dayIndex][staffIndex] ?? '';
+  const curText = (typeof cur === 'object') ? '請假' : (cur || ''); // ← 小寫 c
+  const i = SHIFT_OPTIONS.indexOf(curText);
+  const nextText = SHIFT_OPTIONS[(i + 1) % SHIFT_OPTIONS.length];
 
-        next[dayIndex][staffIndex] =
-          nextText==='請假' ? { shift:'請假', type:'未備註', days:1, notes:'' } : nextText;
+  next[dayIndex][staffIndex] =
+    nextText === '請假'
+      ? { shift:'請假', type:'未備註', days:1, notes:'' }
+      : nextText;
 
-        setSchedule(next);
-        saveSchedule(next);
-      };
-
+  setSchedule(next);
+  saveSchedule(next);
+};
       /* 新增/刪除員工 */
       const handleAddStaff = async ()=>{
         const name = (newStaffName||'').trim();
