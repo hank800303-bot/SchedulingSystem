@@ -447,8 +447,8 @@
         next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
         const cur = next[dayIndex][staffIndex] || '';
-        theCurText = (typeof cur === 'object') ? '請假' : cur; // 變數名無需導出
-        const i = SHIFT_OPTIONS.indexOf(theCurText);
+        CurText = (typeof cur === 'object') ? '請假' : cur; // 變數名無需導出
+        const i = SHIFT_OPTIONS.indexOf(CurText);
         const nextText = SHIFT_OPTIONS[(i+1)%SHIFT_OPTIONS.length];
 
         next[dayIndex][staffIndex] =
