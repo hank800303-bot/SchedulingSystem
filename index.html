@@ -21,14 +21,14 @@
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
     import {
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
     window.firebase = {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
     };
   </script>
 
@@ -49,7 +49,7 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
@@ -314,10 +314,9 @@
         }catch(e){ console.error('Firebase init error:', e); }
       },[]);
 
-      /* 即時同步 staffs & schedule（統一使用 monthId） */
+      /* 即時同步 staffs & schedule（單一版本；已去除 theMonthId 重複段） */
       useEffect(()=>{
         if(!db || !user) return;
-
         const y = currentDate.getFullYear();
         const m = currentDate.getMonth() + 1;
         const monthId = `${y}-${pad2(m)}`;
@@ -337,27 +336,6 @@
 
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
-
-      /* 讀取我的姓名（與鎖定狀態；無則建立空檔） */
-      useEffect(()=>{
-        (async ()=>{
-          if(!db || !user) return;
-          try{
-            const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
-            const psnap = await getDoc(pref);
-            if(psnap.exists()){
-              const data = psnap.data() || {};
-              const dn = data.displayName || '';
-              const locked = data.nameLocked === true || (!!dn);
-              setMyName(dn);
-              setNameLocked(locked);
-            }else{
-              await setDoc(pref, { email:user.email||'', displayName:'', nameLocked:false, updatedAt:new Date() }, { merge:true });
-              setMyName(''); setNameLocked(false);
-            }
-          }catch(e){ console.warn('load profile fail', e); }
-        })();
-      },[db,user]);
 
       /* 今日我的打卡（最近兩筆） */
       useEffect(()=>{
@@ -469,8 +447,8 @@
         next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
         const cur = next[dayIndex][staffIndex] || '';
-        const curText = (typeof cur === 'object') ? '請假' : cur;
-        const i = SHIFT_OPTIONS.indexOf(curText);
+        theCurText = (typeof cur === 'object') ? '請假' : cur; // 變數名無需導出
+        const i = SHIFT_OPTIONS.indexOf(theCurText);
         const nextText = SHIFT_OPTIONS[(i+1)%SHIFT_OPTIONS.length];
 
         next[dayIndex][staffIndex] =
@@ -623,22 +601,52 @@
         win.focus();
       };
 
-      /* 出勤彙總（本月） */
+      /* ========= Firestore 分頁工具 ========= */
+      async function fetchAllByMonth(collectionPath, monthKey, pageSize=1000, maxPages=50){
+        const baseRef = collection(db, collectionPath);
+        let lastDocSnapshot = null;
+        let allDocs = [];
+        let pages = 0;
+
+        while(true){
+          let qy;
+          if(lastDocSnapshot){
+            qy = query(baseRef, where('monthKey','==',monthKey), startAfter(lastDocSnapshot), limit(pageSize));
+          }else{
+            qy = query(baseRef, where('monthKey','==',monthKey), limit(pageSize));
+          }
+
+          const snap = await getDocs(qy);
+          if(snap.empty) break;
+
+          allDocs = allDocs.concat(snap.docs);
+          lastDocSnapshot = snap.docs[snap.docs.length-1];
+          pages++;
+          if(snap.docs.length < pageSize) break;
+          if(pages >= maxPages) break; // 安全終止，避免無限迴圈
+        }
+        return allDocs;
+      }
+
+      /* 出勤彙總（本月）—分頁抓取 */
       const openAttendanceSummary = async ()=>{
         if(!db || !user) return;
         setAttOpen(true); setAttLoading(true);
         try{
           const monthKey = ymLocal(currentDate);
-          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
-          const snap = await getDocs(qy);
+          const docs = await fetchAllByMonth(
+            `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`,
+            monthKey,
+            1000, // 每頁
+            100   // 最多 100k 筆安全上限
+          );
 
           const byUid = new Map();
-          snap.forEach(docu=>{
+          docs.forEach(docu=>{
             const d=docu.data();
             const rec = byUid.get(d.uid) || { uid:d.uid, name:d.displayName||'', email:d.email||'', days:new Map() };
             const day = rec.days.get(d.dateKey) || { ins:[], outs:[] };
-            const ms = d.ts?.toMillis ? d.ts.toMillis() : (Date.parse(d.clientTime||'') || 0);
+            const ms = d.ts?.toMillis ? d.ts.toMillis() : Date.parse(d.clientTime||0);
             if(d.type==='IN')  day.ins.push(ms);
             if(d.type==='OUT') day.outs.push(ms);
             rec.days.set(d.dateKey, day);
@@ -685,20 +693,23 @@
         }finally{ setAttLoading(false); }
       };
 
-      /* 打卡明細（本月） */
+      /* 打卡明細（本月）—分頁抓取 */
       const openMonthlyLogs = async () => {
         if (!db || !user) return;
         setLogOpen(true);
         setLogLoading(true);
         try {
           const monthKey = ymLocal(currentDate);
-          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
-          const snap = await getDocs(qy);
+          const docs = await fetchAllByMonth(
+            `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`,
+            monthKey,
+            1000,
+            100
+          );
 
-          const rows = snap.docs.map(d => {
+          const rows = docs.map(d => {
             const x = d.data();
-            const ms = x.ts?.toMillis ? x.ts.toMillis() : (Date.parse(x.clientTime || '') || 0);
+            const ms = x.ts?.toMillis ? x.ts.toMillis() : Date.parse(x.clientTime || 0);
             return {
               id: d.id,
               name: x.displayName || '未設定',
@@ -922,7 +933,7 @@
                   onChange={e=>setNewStaffName(e.target.value)}
                   placeholder="新增員工姓名"
                   className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500"
-                
+                />
                 <button onClick={handleAddStaff}
                         className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave}
@@ -1083,7 +1094,7 @@
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
                   <h3 className="text-lg font-semibold">
-                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表
                   </h3>
                   <div className="flex items-center gap-2">
                     <div className="flex bg-gray-100 rounded-lg p-1 text-sm">
@@ -1307,7 +1318,7 @@
 
           {/* 出勤彙總（本月） */}
           {attOpen && (
-            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[125]">
+            <div className="fixed inset-0 bg-black/50 flex items-start justify中心 pt-10 p-4 z-[125]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
                   <h3 className="text-lg font-semibold">
