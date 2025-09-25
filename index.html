@@ -922,7 +922,7 @@
                   onChange={e=>setNewStaffName(e.target.value)}
                   placeholder="新增員工姓名"
                   className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
+                
                 <button onClick={handleAddStaff}
                         className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave}
@@ -943,7 +943,7 @@
                 <div>週日：09:30–21:00</div>
               </div>
               <div className="text-xs text-gray-500">
-                提示：點格子可循環班別（早 → 早＋午 → 午 → 午＋晚 → 晚 → <b>全天</b> → 休 → 支援樹林 → 請假 → 空白）
+                點格子可循環班別[早]→[早＋午]→[午]→[午＋晚]→[晚]→[全天]→[休]→[支援樹林]→[請假]→[空白]
               </div>
             </div>
           </div>
