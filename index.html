@@ -48,7 +48,8 @@
 
   <script type="text/babel" data-presets="env,react">
     const { useState, useEffect, useMemo, useRef } = React;
-
+    const [isAdmin, setIsAdmin] = useState(false);
+    
     const {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, getIdTokenResult,
@@ -315,32 +316,45 @@
 
       /* Firebase 初始化 */
       useEffect(()=>{
-        try{
-          const app = initializeApp(firebaseConfig);
-          const _db = getFirestore(app);
-          const _auth = getAuth(app);
-          const _func = getFunctions(app, FUNCTIONS_REGION);
-          setDb(_db); setAuth(_auth); setFunc(_func);
-          const unsub = onAuthStateChanged(_auth, async (cur)=>{
-            setUser(cur||null);
-            if(cur){
-              // 直接決定管理員介面：讀 members/{uid}.isAdmin（不強制 refresh token）
-              try{
-                const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
-                const snap = await getDoc(prefRef);
-                const data = snap.exists() ? snap.data() : {};
-                setIsAdmin(!!data.isAdmin);
-                if (data.displayName) setMyName(data.displayName||'');
-                if (typeof data.nameLocked === 'boolean') setNameLocked(!!data.nameLocked);
-              }catch(e){
-                console.warn('load member profile fail', e);
-              }
-            }
-          });
-          return ()=>unsub && unsub();
-        }catch(e){ console.error('Firebase init error:', e); }
-      },[]);
+        useEffect(()=>{
+  try{
+    const app = initializeApp(firebaseConfig);
+    const _db = getFirestore(app);
+    const _auth = getAuth(app);
+    setDb(_db);
+    setAuth(_auth);
 
+    const unsub = onAuthStateChanged(_auth, async (cur)=>{
+      setUser(cur || null);
+      if (!cur) { setIsAdmin(false); return; }
+
+      try {
+        // 直接從現有 ID Token 讀取自訂權限（不強制刷新）
+        const res = await cur.getIdTokenResult();
+        setIsAdmin(!!res.claims?.admin);
+      } catch (e) {
+        console.warn('getIdTokenResult failed', e);
+        setIsAdmin(false);
+      }
+
+      // 可選：載入成員個人檔案（顯示姓名 & 鎖定狀態）
+      try {
+        const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
+        const snap = await getDoc(prefRef);
+        if (snap.exists()) {
+          setMyName(snap.data().displayName || '');
+          setNameLocked(!!snap.data().nameLocked);
+        }
+      } catch (e) {
+        console.warn('load member profile fail', e);
+      }
+    });
+
+    return ()=> unsub && unsub();
+  }catch(e){
+    console.error('Firebase init error:', e);
+  }
+},[]);
       /* 即時同步 staffs & schedule */
       useEffect(()=>{
         if(!db || !user) return;
