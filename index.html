@@ -253,6 +253,9 @@
       const [auth,setAuth] = useState(null);
       const [func,setFunc] = useState(null);
       const [user,setUser] = useState(null);
+      
+      const claimsRefreshedOnce = React.useRef(false);
+
       const [isAdmin,setIsAdmin] = useState(false);
 
       const [nameModalOpen, setNameModalOpen] = useState(false);
@@ -311,49 +314,62 @@
         prevUidRef.current = uid;
       }, [user?.uid]);
 
-      /* Firebase 初始化 + Auth 監聽 */
-      useEffect(()=>{
-        try{
-          const app = initializeApp(firebaseConfig);
-          const _db = getFirestore(app);
-          const _auth = getAuth(app);
-          const _func = getFunctions(app, FUNCTIONS_REGION);
-          setDb(_db);
-          setAuth(_auth);
-          setFunc(_func);
+      // Firebase 初始化 + 登入狀態監聽
+useEffect(() => {
+  try {
+    const app = initializeApp(firebaseConfig);
+    const _db = getFirestore(app);
+    const _auth = getAuth(app);
+    setDb(_db);
+    setAuth(_auth);
 
-          const unsub = onAuthStateChanged(_auth, async (cur)=>{
-            setUser(cur || null);
-            if (!cur) { setIsAdmin(false); return; }
+    const unsub = onAuthStateChanged(_auth, async (cur) => {
+      setUser(cur || null);
+      setIsAdmin(false);
+      if (!cur) {
+        claimsRefreshedOnce.current = false; // 登出後把「已刷新一次」旗標歸零
+        return;
+      }
 
-            try {
-              // 不強制刷新；用現有 Token 判斷
-              const res = await cur.getIdTokenResult();
-              setIsAdmin(!!res.claims?.admin);
-            } catch (e) {
-              console.warn('getIdTokenResult failed', e);
-              setIsAdmin(false);
-            }
+      try {
+        // 先用現有 token 檢查
+        const r1 = await cur.getIdTokenResult();
+        const isAdm = !!r1.claims?.admin;
+        setIsAdmin(isAdm);
 
-            // 載入個人檔案
-            try {
-              const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
-              const snap = await getDoc(prefRef);
-              if (snap.exists()) {
-                setMyName(snap.data().displayName || '');
-                setNameLocked(!!snap.data().nameLocked);
-              }
-            } catch (e) {
-              console.warn('load member profile fail', e);
-            }
-          });
-
-          return ()=> unsub && unsub();
-        }catch(e){
-          console.error('Firebase init error:', e);
+        // 如果不是 admin，但我們尚未做過一次強制刷新 → 只做一次
+        if (!isAdm && !claimsRefreshedOnce.current) {
+          claimsRefreshedOnce.current = true;
+          await cur.getIdToken(true);              // 強制刷新
+          const r2 = await cur.getIdTokenResult(); // 重新檢查
+          setIsAdmin(!!r2.claims?.admin);
+          console.log('claims(after refresh):', r2.claims); // 偵錯用
+        } else {
+          console.log('claims:', r1.claims); // 偵錯用
         }
-      },[]);
+      } catch (e) {
+        console.warn('getIdTokenResult failed', e);
+        setIsAdmin(false);
+      }
 
+      // 載入個人檔案（顯示姓名 / 鎖定狀態）
+      try {
+        const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
+        const snap = await getDoc(prefRef);
+        if (snap.exists()) {
+          setMyName(snap.data().displayName || '');
+          setNameLocked(!!snap.data().nameLocked);
+        }
+      } catch (e) {
+        console.warn('load member profile fail', e);
+      }
+    });
+
+    return () => unsub && unsub();
+  } catch (e) {
+    console.error('Firebase init error:', e);
+  }
+}, []);
       /* 即時同步 staffs & schedule */
       useEffect(()=>{
         if(!db || !user) return;
