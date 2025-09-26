@@ -21,14 +21,21 @@
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
     import {
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+    import {
+      getFunctions, httpsCallable
+    } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-functions.js";
 
     window.firebase = {
-      initializeApp, getAuth, onAuthStateChanged,
-      createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
-      getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
+      // core
+      initializeApp,
+      // auth
+      getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
+      // db
+      getFirestore, doc, setDoc, onSnapshot, getDoc, collection, addDoc, serverTimestamp, getDocs, query, where, limit,
+      // functions
+      getFunctions, httpsCallable
     };
   </script>
 
@@ -49,13 +56,15 @@
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
       getFirestore, doc, setDoc, onSnapshot, getDoc,
-      collection, addDoc, serverTimestamp, getDocs, query, where, limit, startAfter
+      collection, addDoc, serverTimestamp, getDocs, query, where, limit,
+      getFunctions, httpsCallable
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250922-43';
+    const CODE_VERSION = '20250926-44';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
+    const FUNCTIONS_REGION = 'asia-east1'; // 依你的部署區域調整
 
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
@@ -90,23 +99,18 @@
     const pad2 = (n)=> String(n).padStart(2,'0');
     const ymdLocal = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     const ymLocal  = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}`;
-    const fmtTime = (ts)=> (ts && ts.toDate) ? ts.toDate().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : '—';
-    // YYYY/MM/DD HH:mm
     const fmtYMDHM = (ts)=>{
       const d = (ts && ts.toDate) ? ts.toDate() : (ts instanceof Date ? ts : null);
       if(!d) return '—';
-      const y = d.getFullYear();
-      const m = pad2(d.getMonth()+1);
-      const da = pad2(d.getDate());
-      const hh = pad2(d.getHours());
-      const mm = pad2(d.getMinutes());
+      const y = d.getFullYear(), m = pad2(d.getMonth()+1), da = pad2(d.getDate());
+      const hh = pad2(d.getHours()), mm = pad2(d.getMinutes());
       return `${y}/${m}/${da} ${hh}:${mm}`;
     };
     const debounce = (fn,delay=500)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay);} };
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
     const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
 
-    // 營業時間（週一～五 09:00–22:00；週六 09:00–21:00；週日 09:30–21:00）
+    // 營業時間
     const getBusinessWindow = (date)=>{
       const dow=date.getDay();
       if(dow===0) return { open:toMin(9,30), close:toMin(21,0) };
@@ -173,7 +177,6 @@
           const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
           const t = getShiftText(v);
           if(!t || t==='休' || t==='請假') continue;
-
           const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
 
           if (exportmode === 'full') {
@@ -246,6 +249,9 @@
       const [db,setDb] = useState(null);
       const [auth,setAuth] = useState(null);
       const [user,setUser] = useState(null);
+      const [funcs,setFuncs] = useState(null);
+
+      const [isAdmin, setIsAdmin] = useState(false);
 
       const [nameModalOpen, setNameModalOpen] = useState(false);
       const [pendingPunchType, setPendingPunchType] = useState(null); // 'IN' | 'OUT'
@@ -298,6 +304,7 @@
           setPendingPunchType(null);
           setNameModalOpen(false);
           setLogOpen(false); setLogRows([]);
+          setIsAdmin(false);
         }
         prevUidRef.current = uid;
       }, [user?.uid]);
@@ -308,17 +315,50 @@
           const app = initializeApp(firebaseConfig);
           const _db = getFirestore(app);
           const _auth = getAuth(app);
-          setDb(_db); setAuth(_auth);
-          const unsub = onAuthStateChanged(_auth, cur=> setUser(cur||null));
+          const _funcs = getFunctions(app, FUNCTIONS_REGION);
+          setDb(_db); setAuth(_auth); setFuncs(_funcs);
+          const unsub = onAuthStateChanged(_auth, async (cur)=>{
+            setUser(cur||null);
+            if(cur){
+              try{
+                const res = await cur.getIdTokenResult();
+                setIsAdmin(!!res.claims?.admin);
+              }catch(_){}
+            }else{
+              setIsAdmin(false);
+            }
+          });
           return ()=>unsub && unsub();
         }catch(e){ console.error('Firebase init error:', e); }
       },[]);
 
-      /* 即時同步 staffs & schedule（單一版本；已去除 theMonthId 重複段） */
+      /* 讀取我的姓名（與鎖定狀態；無則建立空檔） */
+      useEffect(()=>{
+        (async ()=>{
+          if(!db || !user) return;
+          try{
+            const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${user.uid}`);
+            const psnap = await getDoc(pref);
+            if(psnap.exists()){
+              const data = psnap.data() || {};
+              const dn = data.displayName || '';
+              const locked = data.nameLocked === true || (!!dn);
+              setMyName(dn);
+              setNameLocked(locked);
+            }else{
+              await setDoc(pref, { email:user.email||'', displayName:'', nameLocked:false, updatedAt:new Date() }, { merge:true });
+              setMyName('');
+              setNameLocked(false);
+            }
+          }catch(e){ console.warn('load profile fail', e); }
+        })();
+      },[db,user]);
+
+      /* 即時同步 staffs & schedule（只讀） */
       useEffect(()=>{
         if(!db || !user) return;
         const y = currentDate.getFullYear();
-        const m = currentDate.getMonth() + 1;
+        const m = currentDate.getMonth()+1;
         const monthId = `${y}-${pad2(m)}`;
 
         const staffRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
@@ -329,11 +369,8 @@
           if(s.exists() && s.data().schedule){
             try{ setSchedule(JSON.parse(s.data().schedule)); }
             catch(e){ console.error('schedule parse error', e); setSchedule([]); }
-          }else{
-            setSchedule([]);
-          }
+          }else setSchedule([]);
         });
-
         return ()=>{ unsubStaff(); unsubSched(); };
       },[db,user,currentDate]);
 
@@ -423,86 +460,103 @@
         }
       }
 
-      /* 儲存班表 */
-      const sanitizeSchedule = (data)=>
-        Array.isArray(data) ? data.map(row => Array.isArray(row) ? row.map(v => (v===undefined?'':v)) : []) : [];
-      const saveSchedule = debounce(async (scheduleData)=>{
-        if(!db || !user) return;
-        try{
-          const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
-          const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          await setDoc(sref, { schedule: JSON.stringify(sanitizeSchedule(scheduleData)), lastUpdated:new Date() }, { merge:true });
-          setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''),1200);
-        }catch(e){
-          console.error('save schedule fail', e);
-          setStatusMessage(`儲存失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+      /* 點格子切換班別（透過 Functions 寫入） */
+      const handleShiftChange = async (dayIndex, staffIndex)=>{
+        const y = currentDate.getFullYear();
+        const m = currentDate.getMonth()+1;
+        const myIdx = staffs.findIndex(n => n === myName);
+        const isMyCell = (myIdx === staffIndex);
+
+        if(!isMyCell && !isAdmin){
+          setStatusMessage('你只能修改自己的班表'); setTimeout(()=>setStatusMessage(''),1600);
+          return;
         }
-      },500);
-      const manualSave = ()=> saveSchedule(schedule);
 
-     // 點格子切換班別（循環）
-const handleShiftChange = (dayIndex, staffIndex) => {
-  const next = (schedule && schedule.slice()) || [];
-  const cols = staffs.length;
-  next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
+        // 計算下一個班別
+        const curVal = (schedule?.[dayIndex]?.[staffIndex]) ?? '';
+        const curText = (typeof curVal === 'object') ? '請假' : (curVal || '');
+        const i = Math.max(0, SHIFT_OPTIONS.indexOf(curText));
+        const nextText = SHIFT_OPTIONS[(i+1) % SHIFT_OPTIONS.length];
+        const nextVal = (nextText === '請假')
+          ? { shift:'請假', type:'未備註', days:1, notes:'' }
+          : nextText;
 
-  const cur = next[dayIndex][staffIndex] ?? '';
-  const curText = (typeof cur === 'object') ? '請假' : (cur || ''); // ← 小寫 c
-  const i = SHIFT_OPTIONS.indexOf(curText);
-  const nextText = SHIFT_OPTIONS[(i + 1) % SHIFT_OPTIONS.length];
+        try{
+          if(isAdmin && !isMyCell){
+            const call = httpsCallable(funcs, 'adminUpdateScheduleCell');
+            await call({ year:y, month:m, day:dayIndex+1, staffName: staffs[staffIndex], value: nextVal });
+          }else{
+            const call = httpsCallable(funcs, 'updateMyScheduleCell');
+            await call({ year:y, month:m, day:dayIndex+1, value: nextVal });
+          }
+          // 樂觀更新（收到 onSnapshot 會再同步）
+          const next = (schedule && schedule.slice()) || [];
+          const cols = staffs.length;
+          next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
+          next[dayIndex][staffIndex] = nextVal;
+          setSchedule(next);
+        }catch(e){
+          console.error('update cell via functions fail:', e);
+          setStatusMessage(`儲存失敗：${e.message || e.code || 'error'}`); setTimeout(()=>setStatusMessage(''),2000);
+        }
+      };
 
-  next[dayIndex][staffIndex] =
-    nextText === '請假'
-      ? { shift:'請假', type:'未備註', days:1, notes:'' }
-      : nextText;
-
-  setSchedule(next);
-  saveSchedule(next);
-};
-      /* 新增/刪除員工 */
+      /* 新增員工（callable） */
       const handleAddStaff = async ()=>{
         const name = (newStaffName||'').trim();
         if(!name) return;
-        if(staffs.includes(name)){ setStatusMessage('該員工已存在！'); setTimeout(()=>setStatusMessage(''),1200); return; }
-
-        const nextStaffs = staffs.concat([name]);
-        setStaffs(nextStaffs);
-        const next = (schedule||[]).map(row => Array.isArray(row) ? row.concat(['']) : Array(nextStaffs.length).fill(''));
-        setSchedule(next);
-        setNewStaffName('');
-
         try{
-          const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-          await setDoc(sref, { names: nextStaffs }, { merge:true });
+          const call = httpsCallable(funcs, 'addStaff');
+          await call({ name });
+          setNewStaffName('');
           setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
         }catch(e){
-          console.error('add staff fail', e);
-          setStatusMessage(`新增失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+          console.error('addStaff fail:', e);
+          setStatusMessage(`新增失敗：${e.message || e.code || 'error'}`); setTimeout(()=>setStatusMessage(''),2000);
         }
       };
-      const handleDeleteStaff = (name)=>{ setStaffToDel(name); setConfirmOpen(true); };
+
+      /* 刪除員工（僅 admin；callable） */
+      const handleDeleteStaff = (name)=>{
+        if(!isAdmin){
+          setStatusMessage('只有管理員可以刪除員工'); setTimeout(()=>setStatusMessage(''),1600);
+          return;
+        }
+        setStaffToDel(name); setConfirmOpen(true);
+      };
       const confirmDeleteStaff = async (name)=>{
-        const idx = staffs.findIndex(n=>n===name);
-        if(idx===-1){ setConfirmOpen(false); setStaffToDel(null); return; }
-        const nextStaffs = staffs.filter((_,i)=>i!==idx);
-        const nextSched  = (schedule||[]).map(row => Array.isArray(row) ? row.filter((_,i)=>i!==idx) : []);
-        setStaffs(nextStaffs); setSchedule(nextSched);
+        if(!isAdmin){ setConfirmOpen(false); setStaffToDel(null); return; }
         try{
-          const sref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-          await setDoc(sref, { names: nextStaffs }, { merge:true });
-          const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
-          const pref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-          await setDoc(pref, { schedule: JSON.stringify(nextSched), lastUpdated: new Date() }, { merge:true });
+          const call = httpsCallable(funcs, 'removeStaff');
+          await call({ name });
           setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
         }catch(e){
-          console.error('delete staff fail', e);
-          setStatusMessage(`刪除員工失敗：${e.code||e.message}`); setTimeout(()=>setStatusMessage(''),2000);
+          console.error('removeStaff fail:', e);
+          setStatusMessage(`刪除員工失敗：${e.message || e.code || 'error'}`); setTimeout(()=>setStatusMessage(''),2000);
         }finally{
           setConfirmOpen(false); setStaffToDel(null);
         }
       };
 
-      /* 打卡（每日 + 扁平 mirror） */
+      /* 手動儲存（我的整欄） */
+      const manualSave = async ()=>{
+        const y = currentDate.getFullYear();
+        const m = currentDate.getMonth()+1;
+        const days = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
+        const myIdx = staffs.findIndex(n => n === myName);
+        if(myIdx === -1){ setStatusMessage('請先在上方設定並鎖定「我的姓名」，且確保員工名單有你的名字'); setTimeout(()=>setStatusMessage(''),2600); return; }
+        const values = Array.from({length:days},(_,i)=> (schedule?.[i]?.[myIdx]) ?? '');
+        try{
+          const call = httpsCallable(funcs, 'saveMyScheduleColumn');
+          await call({ year:y, month:m, values });
+          setStatusMessage('我的整欄已儲存！'); setTimeout(()=>setStatusMessage(''),1400);
+        }catch(e){
+          console.error('saveMyScheduleColumn fail:', e);
+          setStatusMessage(`儲存失敗：${e.message || e.code || 'error'}`); setTimeout(()=>setStatusMessage(''),2000);
+        }
+      };
+
+      /* 打卡（每日 + 扁平 mirror；沿用既有寫法） */
       const handlePunchClick = (type) => {
         if (!myName || !myName.trim()) {
           setPendingPunchType(type);
@@ -602,48 +656,18 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         win.focus();
       };
 
-      /* ========= Firestore 分頁工具 ========= */
-      async function fetchAllByMonth(collectionPath, monthKey, pageSize=1000, maxPages=50){
-        const baseRef = collection(db, collectionPath);
-        let lastDocSnapshot = null;
-        let allDocs = [];
-        let pages = 0;
-
-        while(true){
-          let qy;
-          if(lastDocSnapshot){
-            qy = query(baseRef, where('monthKey','==',monthKey), startAfter(lastDocSnapshot), limit(pageSize));
-          }else{
-            qy = query(baseRef, where('monthKey','==',monthKey), limit(pageSize));
-          }
-
-          const snap = await getDocs(qy);
-          if(snap.empty) break;
-
-          allDocs = allDocs.concat(snap.docs);
-          lastDocSnapshot = snap.docs[snap.docs.length-1];
-          pages++;
-          if(snap.docs.length < pageSize) break;
-          if(pages >= maxPages) break; // 安全終止，避免無限迴圈
-        }
-        return allDocs;
-      }
-
-      /* 出勤彙總（本月）—分頁抓取 */
+      /* 出勤彙總（本月）——用 attendance_flat_logs + monthKey 查詢（分頁/限制在後端或資料量可控） */
       const openAttendanceSummary = async ()=>{
         if(!db || !user) return;
         setAttOpen(true); setAttLoading(true);
         try{
           const monthKey = ymLocal(currentDate);
-          const docs = await fetchAllByMonth(
-            `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`,
-            monthKey,
-            1000, // 每頁
-            100   // 最多 100k 筆安全上限
-          );
+          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000)); // Firestore 單次上限 10k
+          const snap = await getDocs(qy);
 
           const byUid = new Map();
-          docs.forEach(docu=>{
+          snap.forEach(docu=>{
             const d=docu.data();
             const rec = byUid.get(d.uid) || { uid:d.uid, name:d.displayName||'', email:d.email||'', days:new Map() };
             const day = rec.days.get(d.dateKey) || { ins:[], outs:[] };
@@ -694,21 +718,18 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         }finally{ setAttLoading(false); }
       };
 
-      /* 打卡明細（本月）—分頁抓取 */
+      /* 打卡明細（本月；單次 10k 限制） */
       const openMonthlyLogs = async () => {
         if (!db || !user) return;
         setLogOpen(true);
         setLogLoading(true);
         try {
           const monthKey = ymLocal(currentDate);
-          const docs = await fetchAllByMonth(
-            `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`,
-            monthKey,
-            1000,
-            100
-          );
+          const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
+          const snap = await getDocs(qy);
 
-          const rows = docs.map(d => {
+          const rows = snap.docs.map(d => {
             const x = d.data();
             const ms = x.ts?.toMillis ? x.ts.toMillis() : Date.parse(x.clientTime || 0);
             return {
@@ -759,7 +780,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
           <div className="min-h-screen flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
               <div className="flex items-center justify-between">
-                <h1 className="text-3xl font-bold text-gray-900">排班系統登入</h1>
+                <h1 className="text-3xl font-bold text-gray-900">排班系統</h1>
                 <span className="text-xs text-gray-500">版本 {CODE_VERSION}</span>
               </div>
               {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">{error}</div>}
@@ -798,18 +819,23 @@ const handleShiftChange = (dayIndex, staffIndex) => {
 
       /* 主畫面 */
       const daysInMonthVal = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
+      const adminBadge = isAdmin ? <span className="ml-2 inline-block text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-700 align-middle">管理員</span> : null;
 
       return (
         <div className="min-h-screen p-4">
           <header className="mb-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900">排班系統</h1>
+                <h1 className="text-3xl font-bold text-gray-900">排班系統 {adminBadge}</h1>
                 <p className="text-gray-600 mt-1">
                   目前登入：{user.email || '（未提供）'} ｜ 工作區：<span className="font-semibold">{WORKSPACE_ID}</span>
                 </p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <button onClick={async ()=>{
+                  try{ await user.getIdToken(true); const r=await user.getIdTokenResult(); setIsAdmin(!!r.claims?.admin); setStatusMessage('權限已刷新'); setTimeout(()=>setStatusMessage(''),1200); }
+                  catch(e){ console.warn(e); }
+                }} className="px-3 py-2 bg-gray-200 rounded-lg">刷新權限</button>
                 <span className="text-xs text-gray-500">版本 {CODE_VERSION}</span>
                 <button onClick={async ()=>{ try{ await signOut(auth); }catch(e){ setError(`${e.code||'auth/error'}: ${e.message}`); } }}
                         className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">登出</button>
@@ -818,7 +844,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
           </header>
 
           {statusMessage && (
-            <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-6 py-2 rounded-full shadow-lg z-50">
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-2 rounded-full shadow-lg z-50">
               {statusMessage}
             </div>
           )}
@@ -938,7 +964,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                 <button onClick={handleAddStaff}
                         className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">新增</button>
                 <button onClick={manualSave}
-                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存</button>
+                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">手動儲存（我的整欄）</button>
                 <button onClick={()=>setExportOpen(true)}
                         className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 whitespace-nowrap">匯出班表</button>
                 <button onClick={openAttendanceSummary}
@@ -948,6 +974,33 @@ const handleShiftChange = (dayIndex, staffIndex) => {
               </div>
             </div>
 
+            {/* 管理員工具：升級為管理員 */}
+            {isAdmin && (
+              <div className="mt-3 p-3 border rounded-lg bg-amber-50 text-sm">
+                <div className="font-semibold mb-2">管理員工具</div>
+                <div className="flex gap-2 items-center">
+                  <input id="promoteEmail" type="email" placeholder="輸入要升級的帳號 Email"
+                         className="border rounded px-3 py-2 w-64"/>
+                  <button
+                    className="px-3 py-2 bg-amber-600 text-white rounded hover:bg-amber-700"
+                    onClick={async ()=>{
+                      const el = document.getElementById('promoteEmail');
+                      const email = (el?.value||'').trim();
+                      if(!email){ setStatusMessage('請輸入 Email'); setTimeout(()=>setStatusMessage(''),1200); return; }
+                      try{
+                        const call = httpsCallable(funcs, 'promoteToAdmin');
+                        await call({ email });
+                        setStatusMessage(`已升級 ${email} 為管理員`); setTimeout(()=>setStatusMessage(''),1600);
+                      }catch(e){
+                        console.error(e);
+                        setStatusMessage(`升級失敗：${e.message||e.code||'error'}`); setTimeout(()=>setStatusMessage(''),2000);
+                      }
+                    }}
+                  >升級為管理員</button>
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 text-sm text-gray-700 space-y-1">
               <div className="flex flex-wrap gap-4">
                 <div>週一～週五：09:00–22:00</div>
@@ -955,7 +1008,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                 <div>週日：09:30–21:00</div>
               </div>
               <div className="text-xs text-gray-500">
-                點格子可循環班別[早]→[早＋午]→[午]→[午＋晚]→[晚]→[全天]→[休]→[支援樹林]→[請假]→[空白]
+                提示：點格子可循環班別（早 → 早＋午 → 午 → 午＋晚 → 晚 → <b>全天</b> → 休 → 支援樹林 → 請假 → 空白）
               </div>
             </div>
           </div>
@@ -971,8 +1024,12 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                       <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
                         <div className="flex justify-between items-center">
                           <span>{name}</span>
-                          <button onClick={()=>handleDeleteStaff(name)}
-                                  className="text-red-500 hover:text-red-700" title="刪除">
+                          <button
+                            onClick={()=>handleDeleteStaff(name)}
+                            className={`text-red-500 hover:text-red-700 ${!isAdmin ? 'opacity-30 cursor-not-allowed' : ''}`}
+                            title={isAdmin ? '刪除' : '僅管理員可刪除'}
+                            disabled={!isAdmin}
+                          >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
                             </svg>
@@ -1007,6 +1064,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                               <div
                                 onClick={() => handleShiftChange(dayIdx, idx)}
                                 className={`p-1.5 md:p-2 rounded-lg cursor-pointer hover:shadow-md transition text-xs md:text-sm ${cls}`}
+                                title={(!isAdmin && staffs[idx]!==myName) ? '你只能修改自己的班表' : '點擊切換班別'}
                               >
                                 {getFullShiftDisplay(cur, date)}
                               </div>
@@ -1095,7 +1153,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
                   <h3 className="text-lg font-semibold">
-                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
                   </h3>
                   <div className="flex items-center gap-2">
                     <div className="flex bg-gray-100 rounded-lg p-1 text-sm">
@@ -1307,7 +1365,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                           </tr>
                         ))}
                         {!logRows.length && (
-                          <tr><td className="px-3 py-4 text-gray-400" colSpan={6}>（本月尚無打卡資料）</td></tr>
+                          <tr><td className="px-3 py-4 text-gray-400" colSpan={6}>(本月尚無打卡資料)</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -1319,7 +1377,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
 
           {/* 出勤彙總（本月） */}
           {attOpen && (
-            <div className="fixed inset-0 bg-black/50 flex items-start justify中心 pt-10 p-4 z-[125]">
+            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[125]">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
                 <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
                   <h3 className="text-lg font-semibold">
