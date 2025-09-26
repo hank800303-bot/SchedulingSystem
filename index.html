@@ -964,7 +964,8 @@
   onChange={e => setNewStaffName(e.target.value)}
   placeholder={isAdmin ? "新增員工姓名" : "新增你自己的姓名（員工）"}
   className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
-  disabled={!isAdmin}  {/* 非管理員鎖定 */}
+  disabled={!isAdmin}
+  title={isAdmin ? undefined : "非管理員鎖定"}
 />
                 {!isAdmin && (
                   <span className="text-xs text-gray-500 self-center">
