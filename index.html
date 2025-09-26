@@ -97,6 +97,7 @@
     const ymdLocal = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     const ymLocal  = (d)=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}`;
     const fmtTime = (ts)=> (ts && ts.toDate) ? ts.toDate().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : '—';
+    // YYYY/MM/DD HH:mm
     const fmtYMDHM = (ts)=>{
       const d = (ts && ts.toDate) ? ts.toDate() : (ts instanceof Date ? ts : null);
       if(!d) return '—';
@@ -111,7 +112,7 @@
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
     const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
 
-    // 營業時間
+    // 營業時間（週一～五 09:00–22:00；週六 09:00–21:00；週日 09:30–21:00）
     const getBusinessWindow = (date)=>{
       const dow=date.getDay();
       if(dow===0) return { open:toMin(9,30), close:toMin(21,0) };
@@ -141,7 +142,6 @@
     };
 
     const getShiftText = (v)=> (typeof v==='object' && v) ? '請假' : (v||'');
-
     const getFullShiftDisplay = (shift, date)=>{
       const text = getShiftText(shift);
       if(!text) return '';
@@ -155,14 +155,13 @@
       );
     };
 
-    /* === 行事曆 HTML 產生器（省略，與你原版相同） === */
+    /* === 行事曆 HTML 產生器（友善列印 / 新視窗）=== */
     function buildCalendarHTML(y, mIndex0, staffs, schedule, exportmode = 'full'){
-      /* …（此函式內容保持與你提供版本相同）… */
       const m = mIndex0 + 1;
       const esc = (s)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const total = getDaysInMonth(y, mIndex0);
       const first = new Date(y, mIndex0, 1);
-      const firstDowMonStart = (first.getDay() + 6) % 7;
+      const firstDowMonStart = (first.getDay() + 6) % 7; // Monday start
 
       const cells = [];
       for(let i=0;i<firstDowMonStart;i++) cells.push(null);
@@ -180,16 +179,18 @@
           const v = (schedule && schedule[d-1] && schedule[d-1][si]) ?? '';
           const t = getShiftText(v);
           if(!t || t==='休' || t==='請假') continue;
+
           const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+
           if (exportmode === 'full') {
             const info  = getShiftWindowForDate(new Date(y, mIndex0, d), t);
             const short = info.label ? (info.label.split(' (')[0] || '') : '';
-            items.push(
+            const line =
               '<div class="item">'
-              + '<div class="row1"><span class="name">'+esc(name)+'</span> '+esc(tDisp)+'</div>'
-              + (short ? '<div class="row2">'+esc(short)+'</div>' : '')
-              + '</div>'
-            );
+                + '<div class="row1"><span class="name">'+esc(name)+'</span> '+esc(tDisp)+'</div>'
+                + (short ? '<div class="row2">'+esc(short)+'</div>' : '')
+              + '</div>';
+            items.push(line);
           } else {
             items.push('<div class="item"><span class="name">'+esc(name)+'</span>：'+esc(tDisp)+'</div>');
           }
@@ -242,6 +243,7 @@
       '<div class="grid">\n' + cellHtml + '\n</div>\n' +
       '</body>\n' +
       '</html>';
+
       return html;
     }
 
@@ -309,7 +311,7 @@
         prevUidRef.current = uid;
       }, [user?.uid]);
 
-      /* Firebase 初始化（單一 useEffect，無巢狀） */
+      /* Firebase 初始化 + Auth 監聽 */
       useEffect(()=>{
         try{
           const app = initializeApp(firebaseConfig);
@@ -325,14 +327,15 @@
             if (!cur) { setIsAdmin(false); return; }
 
             try {
-              const res = await cur.getIdTokenResult(); // 不強制刷新
+              // 不強制刷新；用現有 Token 判斷
+              const res = await cur.getIdTokenResult();
               setIsAdmin(!!res.claims?.admin);
             } catch (e) {
               console.warn('getIdTokenResult failed', e);
               setIsAdmin(false);
             }
 
-            // 載入成員個人檔案（顯示姓名 & 鎖定狀態）
+            // 載入個人檔案
             try {
               const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
               const snap = await getDoc(prefRef);
@@ -413,7 +416,7 @@
       };
       useEffect(()=>{ if(db && user) loadTodayLatestIO(); }, [db,user]);
 
-      /* 儲存我的姓名（首次儲存後鎖定） */
+      /* 儲存我的姓名（首次儲存後即鎖定；若已鎖定則不允許變更） */
       async function saveMyName(){
         if(!db || !user) return;
         if(nameLocked && (myName || '').trim()){
@@ -474,7 +477,7 @@
         return res.data;
       };
 
-      /* 儲存班表 */
+      /* 儲存班表（由 callable 寫入） */
       const sanitizeSchedule = (data)=>
         Array.isArray(data) ? data.map(row => Array.isArray(row) ? row.map(v => (v===undefined?'':v)) : []) : [];
       const saveScheduleDebounced = debounce(async (scheduleData)=>{
@@ -517,7 +520,7 @@
 
       /* 新增/刪除員工 */
       const handleAddStaff = async ()=>{
-        const name = (isAdmin ? newStaffName : myName || '').trim();
+        const name = (newStaffName||'').trim();
         if(!name){ setStatusMessage('請輸入姓名'); setTimeout(()=>setStatusMessage(''),1200); return; }
 
         // 員工：只能新增與自己姓名相同者（新增自己）
@@ -535,7 +538,7 @@
 
         try{
           await callAddStaff(name);
-          if (isAdmin) setNewStaffName('');
+          setNewStaffName('');
           setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
         }catch(e){
           console.error('addStaff fail', e);
@@ -562,7 +565,7 @@
         }
       };
 
-      /* 打卡 */
+      /* 打卡（每日 + 扁平 mirror） */
       const handlePunchClick = (type) => {
         if (!myName || !myName.trim()) {
           setPendingPunchType(type);
@@ -616,8 +619,6 @@
       };
 
       /* 下載行事曆 PDF（A4 橫式單頁） */
-      const exportRef = useRef(null);
-      const [exportMode, setExportMode] = useState('full');
       const downloadCalendarPDF = async ()=>{
         const el = exportRef.current;
         if(!el){ setStatusMessage('請先開啟「匯出班表」視窗'); setTimeout(()=>setStatusMessage(''),1500); return; }
@@ -664,26 +665,14 @@
         win.focus();
       };
 
-      /* 出勤與打卡明細（與你原版相同，略…） */
-      // -- 出勤彙總、打卡明細函式原樣保留 --
-      // 由於篇幅限制，以下與你貼上的內容相同（僅語法整理），已在上方保留/修正所有必要 state 與工具函式。
-
-      /***（為了貼文長度，以下兩段「openAttendanceSummary / openMonthlyLogs」及其 UI
-       *   我已保持與你提供版本一致，你直接用這份完整檔即可。
-       *   上方已修正所有導致 parse error 的重點。）***/
-
       /* 出勤彙總（本月） */
-      const [attOpen,setAttOpen] = useState(false);
-      const [attLoading,setAttLoading] = useState(false);
-      const [attRows,setAttRows] = useState([]);
-      const attRef = useRef(null);
       const openAttendanceSummary = async ()=>{
         if(!db || !user) return;
         setAttOpen(true); setAttLoading(true);
         try{
           const monthKey = ymLocal(currentDate);
           const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000)); // Firestore 1 次上限 10k
           const snap = await getDocs(qy);
 
           const byUid = new Map();
@@ -739,12 +728,6 @@
       };
 
       /* 打卡明細（本月） */
-      const [logOpen, setLogOpen] = useState(false);
-      const [logLoading, setLogLoading] = useState(false);
-      const [logRows, setLogRows] = useState([]);
-      const [logFilterName, setLogFilterName] = useState('');
-      const [logFilterType, setLogFilterType] = useState('ALL');
-      const logRef = useRef(null);
       const openMonthlyLogs = async () => {
         if (!db || !user) return;
         setLogOpen(true);
@@ -762,7 +745,7 @@
               id: d.id,
               name: x.displayName || '未設定',
               email: x.email || '',
-              type: x.type || '',
+              type: x.type || '',           // 'IN' | 'OUT'
               ts: x.ts || null,
               ms,
               dateKey: x.dateKey || '',
@@ -800,7 +783,7 @@
         return result;
       },[schedule,staffs,currentDate]);
 
-      /* 未登入畫面（略，與你原版相同） */
+      /* 登入畫面 */
       if(!user){
         return (
           <div className="min-h-screen flex items-center justify-center p-4">
@@ -851,9 +834,7 @@
           <header className="mb-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900">
-                  排班系統 {isAdmin && <span className="ml-2 text-xs px-2 py-1 rounded bg-black text-white align-middle">管理員</span>}
-                </h1>
+                <h1 className="text-3xl font-bold text-gray-900">排班系統 {isAdmin && <span className="ml-2 text-xs px-2 py-1 rounded bg-black text-white align-middle">管理員</span>}</h1>
                 <p className="text-gray-600 mt-1">
                   目前登入：{user.email || '（未提供）'} ｜ 工作區：<span className="font-semibold">{WORKSPACE_ID}</span>
                 </p>
@@ -900,7 +881,61 @@
           </div>
 
           {/* 打卡 + 今日最新上/下班 */}
-          <!--（此段與你原版相同，略）-->
+          <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="flex gap-2">
+                <button onClick={()=>handlePunchClick('IN')}  className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600">上班打卡</button>
+                <button onClick={()=>handlePunchClick('OUT')} className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600">下班打卡</button>
+              </div>
+              <div className="text-sm text-gray-600">
+                今天打卡紀錄：{
+                  myTodayLogs.length
+                    ? myTodayLogs.map(l => `${l.type==='IN'?'上班打卡':'下班打卡'} ${fmtYMDHM(l.ts)}`).join('｜')
+                    : '—'
+                }
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <h2 className="text-lg font-semibold">今日所有人的最新上/下班</h2>
+                <button onClick={loadTodayLatestIO} className="px-3 py-2 bg-slate-700 text-white rounded hover:bg-slate-800">重新整理</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="px-3 py-2 text-left">姓名</th>
+                      <th className="px-3 py-2 text-left">帳號</th>
+                      <th className="px-3 py-2 text-left">最新上班</th>
+                      <th className="px-3 py-2 text-left">最新下班</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todayLatestIO.map(r=>(
+                      <tr key={r.uid} className="border-t">
+                        <td className="px-3 py-2">{r.displayName || '未設定'}</td>
+                        <td className="px-3 py-2">{r.email || r.uid}</td>
+                        <td className="px-3 py-2">
+                          {r.inTs
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">上班 {fmtYMDHM(r.inTs)}</span>
+                            : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.outTs
+                            ? <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">下班 {fmtYMDHM(r.outTs)}</span>
+                            : <span className="text-gray-400">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                    {!todayLatestIO.length && (
+                      <tr><td className="px-3 py-4 text-gray-400" colSpan={4}>（今天尚無資料）</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
 
           {/* 控制列 */}
           <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
@@ -922,20 +957,20 @@
                 <button onClick={()=>setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth()+1, 1))}
                         className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">下一月</button>
               </div>
-
-              {/* 新增員工輸入框：非管理員自動帶入 myName + 鎖定 */}
               <div className="flex flex-wrap md:flex-nowrap items-stretch md:items-center gap-2 w-full md:w-auto">
                 <input
                   type="text"
-                  value={isAdmin ? newStaffName : (myName || '')}
-                  onChange={e=>{ if (isAdmin) setNewStaffName(e.target.value); }}
-                  placeholder={isAdmin ? "新增員工姓名" : (myName ? "" : "請先在上方「我的姓名」輸入")}
-                  className={
-                    "border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500 " +
-                    (!isAdmin ? "bg-gray-50 text-gray-700 cursor-not-allowed" : "")
-                  }
-                  readOnly={!isAdmin}
+                  value={isAdmin ? newStaffName : (myName || newStaffName)}
+                  onChange={e=> setNewStaffName(e.target.value)}
+                  placeholder={isAdmin ? "新增員工姓名" : "新增你自己的姓名（員工）"}
+                  className="border rounded-lg px-4 py-2 flex-1 min-w-[240px] w-full md:w-64 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
+                  disabled={!isAdmin}  <!-- 非管理員鎖定 -->
                 />
+                {!isAdmin && (
+                  <span className="text-xs text-gray-500 self-center">
+                    非管理員僅能新增自己的姓名（已鎖定為：{myName || '請先於上方儲存姓名'}）
+                  </span>
+                )}
                 <button onClick={handleAddStaff}
                         className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap">
                   新增
@@ -963,11 +998,432 @@
             </div>
           </div>
 
-          {/* 主表（表頭垃圾桶按鈕照舊，若不是管理員會 disabled） */}
-          <!--（你的表格區與統計區可沿用原本內容，這裡就不重貼冗長 JSX）-->
+          {/* 主表 */}
+          <div className="overflow-x-auto scrollbar-hide">
+            <div className="min-w-max bg-white rounded-xl shadow-lg overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-gray-200 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">日期</th>
+                    {staffs.map((name, idx)=>(
+                      <th key={idx} className="px-4 py-3 border-r-2 border-gray-300 whitespace-nowrap">
+                        <div className="flex justify-between items-center">
+                          <span>{name}</span>
+                          <button onClick={()=>handleDeleteStaff(name)}
+                                  className={`text-red-500 hover:text-red-700 ${!isAdmin ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                  title={isAdmin ? "刪除" : "只有管理員可刪除"}
+                                  disabled={!isAdmin}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 112 0v6a1 1 0 11-2 0V8z" clipRule="evenodd"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Array.from({ length: daysInMonthVal }).map((_, dayIdx) => {
+                    const day = dayIdx + 1;
+                    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+                    const dowName = getDowName(currentDate.getFullYear(), currentDate.getMonth(), day);
 
-          {/* 刪除確認 / 姓名彈窗 / 匯出班表 / 打卡明細 / 出勤彙總 */}
-          <!--（以上四個 modal 都沿用你原本的內容即可，本文已修正前面導致語法錯誤的部分）-->
+                    return (
+                      <tr key={dayIdx} className="border-t">
+                        <td className="px-4 py-2 border-r-2 border-gray-300 whitespace-nowrap font-bold text-gray-700">
+                          {currentDate.getMonth() + 1}月{day}號（{dowName}）
+                        </td>
+
+                        {staffs.map((ownerName, idx) => {
+                          const cur = (schedule[dayIdx] && schedule[dayIdx][idx]) || '';
+                          const cls =
+                            SHIFT_COLOR[(typeof cur === 'object') ? '請假' : getShiftText(cur)] || SHIFT_COLOR[''];
+                          const editable = isAdmin || (myName && ownerName === myName);
+
+                          return (
+                            <td
+                              key={idx}
+                              className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
+                            >
+                              <div
+                                onClick={() => editable ? handleShiftChange(dayIdx, idx) : setStatusMessage('你只能編輯自己的班表')||setTimeout(()=>setStatusMessage(''),1000)}
+                                className={`p-1.5 md:p-2 rounded-lg ${editable ? 'cursor-pointer hover:shadow-md' : 'opacity-60 cursor-not-allowed'} transition text-xs md:text-sm ${cls}`}
+                                title={editable ? '' : '非管理員只能編輯自己'}
+                              >
+                                {getFullShiftDisplay(cur, date)}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-gray-200 sticky bottom-0 z-10">
+                  <tr>
+                    <td className="px-4 py-3 border-r-2 border-gray-300 font-bold whitespace-nowrap">總計</td>
+                    {staffs.map((name, idx)=>(
+                      <td key={idx} className="px-4 py-3 border-r-2 border-gray-300 text-sm whitespace-nowrap">
+                        <div>
+                          <p>總天數: {stats[name]?.totalDays || 0}</p>
+                          <p>總時數: {stats[name]?.totalHours || 0} 小時</p>
+                          <p>請假天數: {stats[name]?.leaveDays || 0}</p>
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          {/* 刪除確認 */}
+          {confirmOpen && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-[110]">
+              <div className="bg-white rounded-lg p-6 shadow-xl max-w-sm w-full text-center">
+                <h3 className="text-lg font-bold mb-4">確認刪除</h3>
+                <p className="mb-6">是否確認刪除員工 <span className="font-semibold text-red-600">"{staffToDel}"</span>？此操作無法復原。</p>
+                <div className="flex justify-center gap-3">
+                  <button onClick={()=>{ setConfirmOpen(false); setStaffToDel(null); }} className="px-4 py-2 bg-gray-200 rounded-lg">取消</button>
+                  <button onClick={()=>confirmDeleteStaff(staffToDel)} className="px-4 py-2 bg-red-500 text-white rounded-lg">確認刪除</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 第一次使用：姓名彈窗 */}
+          {nameModalOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div className="px-5 py-4 border-b flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">第一次使用：請設定姓名</h3>
+                  <button onClick={()=>{ setNameModalOpen(false); setPendingPunchType(null); }}
+                          className="px-2 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
+                </div>
+                <div className="p-5 space-y-3">
+                  <label className="block text-sm text-gray-600">我的姓名</label>
+                  <input
+                    className="w-full border rounded px-3 py-2"
+                    placeholder="例如：王小明"
+                    value={myName}
+                    onChange={e=>setMyName(e.target.value)}
+                  />
+                  {staffs?.length > 0 && (
+                    <div className="text-sm">
+                      <span className="text-gray-600 mr-2">或從員工名單選擇：</span>
+                      <select className="border rounded px-2 py-1" onChange={e=>setMyName(e.target.value)} value={myName || ''}>
+                        <option value="">— 選擇 —</option>
+                        {staffs.map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+                <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+                  <button onClick={()=>{ setNameModalOpen(false); setPendingPunchType(null); }}
+                          className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">取消</button>
+                  <button onClick={saveMyName}
+                          className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                    儲存並繼續
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 匯出班表（行事曆） */}
+          {exportOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[120]">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
+                  <h3 className="text-lg font-semibold">
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 班表（週一→週日）
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <div className="flex bg-gray-100 rounded-lg p-1 text-sm">
+                      <button
+                        className={`px-3 py-1.5 rounded ${exportMode==='full' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}
+                        onClick={()=>setExportMode('full')}
+                        title="顯示姓名、班別與時段"
+                      >完整</button>
+                      <button
+                        className={`px-3 py-1.5 rounded ${exportMode==='simple' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}
+                        onClick={()=>setExportMode('simple')}
+                        title="僅顯示姓名：班別"
+                      >精簡</button>
+                    </div>
+                    <button onClick={downloadCalendarPDF}
+                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
+                    <button onClick={printScheduleModal}
+                            className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
+                    <button onClick={()=>setExportOpen(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
+                  </div>
+                </div>
+
+                <div className="p-5 overflow-auto" ref={exportRef}>
+                  <div className="w-[1120px] sm:w-auto mx-auto">
+                    <div className="grid grid-cols-7 gap-2 text-center text-[11px] sm:text-sm text-gray-600">
+                      {['一','二','三','四','五','六','日'].map(w => (
+                        <div key={w} className="font-semibold">{w}</div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-2 mt-2">
+                      {(() => {
+                        const y = currentDate.getFullYear(), m = currentDate.getMonth();
+                        const first = new Date(y, m, 1);
+                        const total = getDaysInMonth(y, m);
+                        const firstDowMonStart = (first.getDay() + 6) % 7; // Mon=0
+                        const cells = Array.from({length:firstDowMonStart}, ()=>null)
+                                           .concat(Array.from({length: total}, (_,i)=> i+1));
+                        while (cells.length % 7 !== 0) cells.push(null);
+
+                        return cells.map((d, idx) => (
+                          <div key={idx} className="min-h-[5rem] sm:min-h-[7rem] border rounded p-1.5 sm:p-2 bg-white">
+                            {d ? (
+                              <>
+                                <div className="flex items-center justify-between text-[10px] sm:text-xs text-gray-500">
+                                  <span className="inline-block px-1 py-0.5 rounded bg-gray-100 border">{m+1}/{d}</span>
+                                  <span></span>
+                                </div>
+
+                                <div className="mt-1 space-y-1 text-[11px] sm:text-sm leading-tight">
+                                  {(() => {
+                                    const items = staffs.map((name, si) => {
+                                      const v = schedule[d-1]?.[si] ?? '';
+                                      const t = getShiftText(v);
+                                      if (!t || t==='休' || t==='請假') return null;
+
+                                      const tDisp = t.replace('早+午','早＋午').replace('午+晚','午＋晚');
+
+                                      if (exportMode === 'full') {
+                                        const info  = getShiftWindowForDate(new Date(y, m, d), t);
+                                        const short = info.label ? (info.label.split(' (')[0] || '') : '';
+                                        return (
+                                          <div key={name+si} className="leading-tight">
+                                            <div className="truncate">
+                                              <span className="font-medium">{name}</span> {tDisp}
+                                            </div>
+                                            {short && <div className="text-[10px] sm:text-xs text-gray-600">{short}</div>}
+                                          </div>
+                                        );
+                                      } else {
+                                        return (
+                                          <div key={name+si} className="truncate">
+                                            <span className="font-medium">{name}</span>：{tDisp}
+                                          </div>
+                                        );
+                                      }
+                                    }).filter(Boolean);
+                                    return items.length ? items : <div className="text-gray-300">—</div>;
+                                  })()}
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                        ));
+                      })()}
+                    </div>
+
+                    <div className="mt-2 text-center text-xs text-gray-500 sm:hidden">
+                      （手機可左右滑動檢視）
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 打卡明細（本月） */}
+          {logOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[124]">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
+                  <h3 className="text-lg font-semibold">
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 打卡明細
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <select value={logFilterName} onChange={e=>setLogFilterName(e.target.value)}
+                            className="border rounded px-2 py-1 text-sm">
+                      <option value="">全部人員</option>
+                      {staffs.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <select value={logFilterType} onChange={e=>setLogFilterType(e.target.value)}
+                            className="border rounded px-2 py-1 text-sm">
+                      <option value="ALL">全部類型</option>
+                      <option value="IN">上班</option>
+                      <option value="OUT">下班</option>
+                    </select>
+
+                    <button
+                      onClick={()=>{
+                        const zhType = t => t==='IN' ? '上班' : (t==='OUT' ? '下班' : t);
+                        const rows = [['日期','姓名','帳號','類型','時間','來源']];
+                        const filtered = logRows.filter(r =>
+                          (logFilterName ? r.name===logFilterName : true) &&
+                          (logFilterType==='ALL' ? true : r.type===logFilterType)
+                        );
+                        filtered.forEach(r=>{
+                          rows.push([
+                            r.dateKey,
+                            r.name,
+                            r.email || r.id,
+                            zhType(r.type),
+                            fmtYMDHM(r.ts || new Date(r.ms)),
+                            r.by || ''
+                          ]);
+                        });
+                        const csv = rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+                        const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a'); a.href=url;
+                        const y=currentDate.getFullYear(), m=currentDate.getMonth()+1;
+                        a.download=`打卡明細_${y}-${pad2(m)}.csv`; a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                      disabled={logLoading}
+                    >下載CSV</button>
+
+                    <button
+                      onClick={()=>{
+                        const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1;
+                        const win=window.open('','_blank'); if(!win){ alert('請允許彈出視窗'); return; }
+                        win.document.write(
+                          '<html><head><meta charset="utf-8"/><title>'+y+'年'+pad2(mo)+'月 打卡明細</title>'+
+                          '<style>@page { size: A4 landscape; margin: 10mm; }'+
+                          'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;padding:16px}'+
+                          'table{border-collapse:collapse;width:100%} th,td{border:1px solid #e5e7eb;padding:8px;text-align:left} thead{background:#f3f4f6}'+
+                          '</style></head><body>'+
+                          '<h1 style="margin:0 0 12px;font-size:18px;">'+y+'年'+pad2(mo)+'月 打卡明細</h1>'+
+                          '<div id="content">'+(logRef.current ? logRef.current.innerHTML : '')+'</div>'+
+                          '</body></html>'
+                        );
+                        win.document.close(); win.focus();
+                      }}
+                      className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800"
+                      disabled={logLoading}
+                    >友善列印</button>
+
+                    <button onClick={()=>setLogOpen(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">
+                      關閉
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-5 overflow-auto" ref={logRef}>
+                  {logLoading ? (
+                    <div className="text-gray-500">載入中…</div>
+                  ) : (
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="px-3 py-2 text-left">日期</th>
+                          <th className="px-3 py-2 text-left">姓名</th>
+                          <th className="px-3 py-2 text-left">帳號</th>
+                          <th className="px-3 py-2 text-left">類型</th>
+                          <th className="px-3 py-2 text-left">時間</th>
+                          <th className="px-3 py-2 text-left">來源</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logRows
+                          .filter(r =>
+                            (logFilterName ? r.name===logFilterName : true) &&
+                            (logFilterType==='ALL' ? true : r.type===logFilterType)
+                          )
+                          .map(r=>(
+                          <tr key={r.id} className="border-t">
+                            <td className="px-3 py-2">{r.dateKey || '—'}</td>
+                            <td className="px-3 py-2">{r.name}</td>
+                            <td className="px-3 py-2">{r.email || r.id}</td>
+                            <td className="px-3 py-2">{r.type==='IN'?'上班':'下班'}</td>
+                            <td className="px-3 py-2">{fmtYMDHM(r.ts || new Date(r.ms))}</td>
+                            <td className="px-3 py-2">{r.by || ''}</td>
+                          </tr>
+                        ))}
+                        {!logRows.length && (
+                          <tr><td className="px-3 py-4 text-gray-400" colSpan={6}>（本月尚無打卡資料）</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 出勤彙總（本月） */}
+          {attOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-start justify-center pt-10 p-4 z-[125]">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] overflow-hidden flex flex夯">
+                <div className="px-5 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-[1]">
+                  <h3 className="text-lg font-semibold">
+                    {currentDate.getFullYear()}年{pad2(currentDate.getMonth()+1)}月 出勤彙總
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button onClick={()=>{
+                      const y=currentDate.getFullYear(), m=currentDate.getMonth()+1;
+                      const rows=[['姓名','帳號','出勤天數','缺卡天數','總時數']];
+                      attRows.forEach(r=> rows.push([r.name, r.email || r.uid, r.daysPresent, r.missingDays, r.totalHours]));
+                      const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+                      const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+                      const url=URL.createObjectURL(blob);
+                      const a=document.createElement('a'); a.href=url; a.download=`出勤彙總_${y}-${pad2(m)}.csv`; a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700" disabled={attLoading}>下載CSV</button>
+                    <button onClick={()=>{
+                      const y=currentDate.getFullYear(), mo=currentDate.getMonth()+1;
+                      const win=window.open('','_blank'); if(!win){ alert('請允許彈出視窗'); return; }
+                      win.document.write(
+                        '<html><head><meta charset="utf-8"/><title>'+y+'年'+pad2(mo)+'月 出勤彙總</title>' +
+                        '<style>@page { size: A4 landscape; margin: 10mm; } body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;padding:16px} table{border-collapse:collapse;width:100%} th,td{border:1px solid #e5e7eb;padding:8px;text-align:left} thead{background:#f3f4f6}</style></head>' +
+                        '<body><h1 style="margin:0 0 12px;font-size:20px;">'+y+'年'+pad2(mo)+'月 出勤彙總</h1><div id="content">'+ (attRef.current?attRef.current.innerHTML:'') +'</div></body></html>'
+                      );
+                      win.document.close(); win.focus();
+                    }}
+                            className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800" disabled={attLoading}>友善列印</button>
+                    <button onClick={()=>setAttOpen(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300">關閉</button>
+                  </div>
+                </div>
+                <div className="p-5 overflow-auto" ref={attRef}>
+                  {attLoading ? (
+                    <div className="text-gray-500">載入中…</div>
+                  ) : (
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="px-3 py-2 text-left">姓名</th>
+                          <th className="px-3 py-2 text-left">帳號</th>
+                          <th className="px-3 py-2 text-right">出勤天數</th>
+                          <th className="px-3 py-2 text-right">缺卡天數</th>
+                          <th className="px-3 py-2 text-right">總時數</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attRows.length ? attRows.map(r=>(
+                          <tr key={r.uid} className="border-t">
+                            <td className="px-3 py-2">{r.name}</td>
+                            <td className="px-3 py-2">{r.email || r.uid}</td>
+                            <td className="px-3 py-2 text-right">{r.daysPresent}</td>
+                            <td className="px-3 py-2 text-right">{r.missingDays}</td>
+                            <td className="px-3 py-2 text-right">{r.totalHours}</td>
+                          </tr>
+                        )) : (
+                          <tr><td className="px-3 py-4 text-gray-400" colSpan={5}>（本月尚無資料或尚未開啟打卡扁平化）</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       );
     }
