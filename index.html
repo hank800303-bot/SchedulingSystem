@@ -312,90 +312,64 @@
         }
         prevUidRef.current = uid;
       }, [user?.uid]);
+      
+// Firebase 初始化 + 登入狀態監聽
+React.useEffect(() => {
+  const app   = initializeApp(firebaseConfig);
+  const _db   = getFirestore(app);
+  const _auth = getAuth(app);
+  const _func = getFunctions(app, FUNCTIONS_REGION);
+  setDb(_db); setAuth(_auth); setFunc(_func);
 
-      // Firebase 初始化 + 登入狀態監聽
-useEffect(() => {
-  try {
-    const app = initializeApp(firebaseConfig);
-    const _db = getFirestore(app);
-    const _auth = getAuth(app);
-    setDb(_db);
-    setAuth(_auth);
+  const unsub = onAuthStateChanged(_auth, async (cur) => {
+    setUser(cur || null);
+    if (!cur) { setIsAdmin(false); return; }
 
-    const unsub = onAuthStateChanged(_auth, async (cur) => {
-      setUser(cur || null);
-      setIsAdmin(false);
-      if (!cur) {
-        claimsRefreshedOnce.current = false; // 登出後把「已刷新一次」旗標歸零
-        return;
+    try {
+      // 1) 先用現有 token 判斷
+      const r1 = await cur.getIdTokenResult();
+      let adminFlag = !!r1.claims?.admin;
+
+      // 2) 非 admin 且尚未刷新過 → 強制刷新一次再看
+      if (!adminFlag && !claimsRefreshedOnce.current) {
+        claimsRefreshedOnce.current = true;
+        await cur.getIdToken(true);
+        const r2 = await cur.getIdTokenResult();
+        adminFlag = !!r2.claims?.admin;
+        window.lastClaims = r2.claims;
+        console.log('claims(after refresh):', r2.claims);
+      } else {
+        window.lastClaims = r1.claims;
+        console.log('claims:', r1.claims);
       }
 
-// 放在 App() 內部、useEffect 之後任何地方都可
-window.debugIsAdmin = () => {
+      setIsAdmin(adminFlag);
+
+      // 3) 載入個人檔案（顯示姓名 / 鎖定）
+      try {
+        const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
+        const snap = await getDoc(prefRef);
+        if (snap.exists()) {
+          setMyName(snap.data().displayName || '');
+          setNameLocked(!!snap.data().nameLocked);
+        }
+      } catch (e) {
+        console.warn('load member profile fail', e);
+      }
+    } catch (e) {
+      console.warn('getIdTokenResult failed', e);
+      setIsAdmin(false);
+    }
+  });
+
+  return () => unsub();
+}, []);
+      
+      window.debugIsAdmin = () => {
   console.log('isAdmin state =', isAdmin);
   return isAdmin;
 };
       
-const unsub = onAuthStateChanged(_auth, async (cur) => {
-  setUser(cur || null);
-  if (!cur) { setIsAdmin(false); return; }
-
-  try {
-    // 1) 先用現有 token 判斷
-    const r1 = await cur.getIdTokenResult();
-    let adminFlag = !!r1.claims?.admin;
-
-    // 2) 如果還不是 admin，但尚未做過一次強制刷新，就刷新一次再看
-    if (!adminFlag && !claimsRefreshedOnce.current) {
-      claimsRefreshedOnce.current = true;
-      await cur.getIdToken(true);                 // 強制刷新
-      const r2 = await cur.getIdTokenResult();
-      adminFlag = !!r2.claims?.admin;
-      window.lastClaims = r2.claims;
-      console.log('claims(after refresh):', r2.claims);
-    } else {
-      window.lastClaims = r1.claims;
-      console.log('claims:', r1.claims);
-    }
-
-    setIsAdmin(adminFlag);
-
-    // 3) 載入個人檔案（顯示姓名 / 鎖定）
-    try {
-      const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
-      const snap = await getDoc(prefRef);
-      if (snap.exists()) {
-        setMyName(snap.data().displayName || '');
-        setNameLocked(!!snap.data().nameLocked);
-      }
-    } catch (e) {
-      console.warn('load member profile fail', e);
-    }
-  } catch (e) {
-    console.warn('getIdTokenResult failed', e);
-    setIsAdmin(false);
-  }
-});
-      /* 即時同步 staffs & schedule */
-      useEffect(()=>{
-        if(!db || !user) return;
-        const y = currentDate.getFullYear();
-        const m = currentDate.getMonth()+1;
-        const monthId = `${y}-${pad2(m)}`;
-
-        const staffRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-        const schedRef = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/schedules/${monthId}`);
-
-        const unsubStaff = onSnapshot(staffRef, s=> setStaffs(s.exists() ? (s.data().names||[]) : []));
-        const unsubSched = onSnapshot(schedRef, s=>{
-          if(s.exists() && s.data().schedule){
-            try{ setSchedule(JSON.parse(s.data().schedule)); }
-            catch(e){ console.error('schedule parse error', e); setSchedule([]); }
-          }else setSchedule([]);
-        });
-        return ()=>{ unsubStaff(); unsubSched(); };
-      },[db,user,currentDate]);
-
       /* 今日我的打卡（最近兩筆） */
       useEffect(()=>{
         (async ()=>{
