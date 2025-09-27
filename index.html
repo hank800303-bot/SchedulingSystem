@@ -320,7 +320,9 @@ React.useEffect(() => {
   const _auth = getAuth(app);
   const _func = getFunctions(app, FUNCTIONS_REGION);
   setDb(_db); setAuth(_auth); setFunc(_func);
-
+window.func = _func; // 暴露給 Console
+window.callAdd = (name) => httpsCallable(_func, 'addStaff')({ workspaceId: WORKSPACE_ID, name });
+  
   const unsub = onAuthStateChanged(_auth, async (cur) => {
     setUser(cur || null);
     if (!cur) { setIsAdmin(false); return; }
