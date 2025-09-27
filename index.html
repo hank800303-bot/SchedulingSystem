@@ -331,6 +331,12 @@ useEffect(() => {
         return;
       }
 
+// 放在 App() 內部、useEffect 之後任何地方都可
+window.debugIsAdmin = () => {
+  console.log('isAdmin state =', isAdmin);
+  return isAdmin;
+};
+      
       try {
         // 先用現有 token 檢查
         const r1 = await cur.getIdTokenResult();
@@ -1444,11 +1450,6 @@ useEffect(() => {
         </div>
       );
     }
-
-window.debugIsAdmin = () => {
-  console.log('isAdmin state =', isAdmin);
-  return isAdmin;
-};
     
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
