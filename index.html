@@ -1445,6 +1445,11 @@ useEffect(() => {
       );
     }
 
+window.debugIsAdmin = () => {
+  console.log('isAdmin state =', isAdmin);
+  return isAdmin;
+};
+    
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
