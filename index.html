@@ -62,7 +62,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250928-52';
+    const CODE_VERSION = '20250928-53';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -510,8 +510,11 @@ useEffect(() => {
       const manualSave = ()=> saveScheduleDebounced(schedule);
 
       // 點格子切換班別（循環）
+// 點格子切換班別（更耐用版本）
 const handleShiftChange = (dayIndex, staffIndex) => {
   const ownerName = staffs[staffIndex];
+
+  // 權限：員工只能改自己
   if (!isAdmin) {
     if (!myName || ownerName !== myName) {
       setStatusMessage('你只能編輯自己的班表');
@@ -520,33 +523,47 @@ const handleShiftChange = (dayIndex, staffIndex) => {
     }
   }
 
-  // 1) 先複製出「下一版」表格
+  // --- 點擊降噪：300ms 內只吃一次，防止延遲造成過度循環 ---
+  const key = `${dayIndex}:${staffIndex}`;
+  if (!handleShiftChange._hot) handleShiftChange._hot = new Map();
+  const last = handleShiftChange._hot.get(key) || 0;
+  const now = Date.now();
+  if (now - last < 300) return; // 忽略過密點擊
+  handleShiftChange._hot.set(key, now);
+  setTimeout(() => handleShiftChange._hot.delete(key), 320);
+
+  // 1) 複製目前表格
   const cols = staffs.length;
   const next = (schedule && schedule.slice()) || [];
-  next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
-  // 2) 讀取目前值，換算成文字（物件代表「請假」）
-  const cur = next[dayIndex][staffIndex];
+  // 2) 取得該天 row，並「補齊到與員工數相同長度」
+  const row = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : [];
+  while (row.length < cols) row.push(''); // 重要：補齊空白欄
+
+  // 3) 取目前值 -> 文字（物件即代表「請假」）
+  const cur = row[staffIndex];
   const curText = (typeof cur === 'object') ? '請假' : (cur || '');
 
-  // 3) 找到在 SHIFT_OPTIONS 的位置，若找不到就當作從 -1 開始（第一次點會到 0）
+  // 4) 從 SHIFT_OPTIONS 找索引；找不到就從 -1 起算（第一次點會到 0）
   const i = SHIFT_OPTIONS.indexOf(curText);
   const nextIndex = ((i >= 0 ? i : -1) + 1) % SHIFT_OPTIONS.length;
   const nextText = SHIFT_OPTIONS[nextIndex];
 
-  // 4) 寫入新值（請假用物件，其它用字串）
-  next[dayIndex][staffIndex] =
-    nextText === '請假'
-      ? { shift: '請假', type: '未備註', days: 1, notes: '' }
-      : nextText;
+  // 5) 寫回 row（請假用物件，其它用字串）
+  row[staffIndex] = (nextText === '請假')
+    ? { shift: '請假', type: '未備註', days: 1, notes: '' }
+    : nextText;
 
-  // 5) 立刻更新 UI（不阻塞點擊手感）
+  next[dayIndex] = row;
+
+  // 6) 先更新 UI，再用 debounce 存檔（避免阻塞點擊手感）
   setSchedule(next);
-
-  // 6) 再用 debounce 後存檔（維持你現有的 saveScheduleDebounced）
   saveScheduleDebounced(next);
-};
 
+  // 7) 若後端規則不允許目前身分寫入，會在 Console 出現 callable 錯誤，
+  //    並且 onSnapshot 很快把它覆蓋回舊值，看起來像「點了沒變」。
+  //    這時請確認後端 saveSchedule 的權限是否允許員工改「自己的那一欄」。
+};
       /* 新增/刪除員工（新增只給管理員；員工 UI 不顯示） */
       const handleAddStaff = async ()=>{
         const name = (newStaffName || '').trim();
