@@ -65,7 +65,7 @@
     } = window.firebase;
 
     /* ===== 常數 ===== */
-    const CODE_VERSION = '20250929-62';
+    const CODE_VERSION = '20250929-63';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -498,6 +498,27 @@ const callRevoke = async (identifier) => {
   });
   return r.data;
 };
+      const callAddStaff = async (name) => {
+  if (!func) throw new Error('Functions not ready');
+  const r = await httpsCallable(func, 'addStaff')({
+    workspaceId: WORKSPACE_ID, name
+  });
+  return r.data;
+};
+const callRemoveStaff = async (name) => {
+  if (!func) throw new Error('Functions not ready');
+  const r = await httpsCallable(func, 'removeStaff')({
+    workspaceId: WORKSPACE_ID, name
+  });
+  return r.data;
+};
+const callSaveSchedule = async (monthId, scheduleJson) => {
+  if (!func) throw new Error('Functions not ready');
+  const r = await httpsCallable(func, 'saveSchedule')({
+    workspaceId: WORKSPACE_ID, monthId, schedule: scheduleJson
+  });
+  return r.data;
+};
 
 // 管理員工具列用（保留語意名稱）
 async function promoteByInput(_db, _func, input) {
@@ -506,42 +527,6 @@ async function promoteByInput(_db, _func, input) {
 async function revokeByInput(_db, _func, input) {
   return callRevoke((input || '').trim());
 }
-
-      /* 解析輸入（姓名 / Email / UID）→ 目標 UID（管理員工具列用） */
-      async function resolveTargetToUid(db, input) {
-        const v = (input || '').trim();
-        if (!v) throw new Error('請輸入姓名、Email 或 UID');
-
-        const membersCol = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members`);
-
-        if (!v.includes('@')) { // 姓名
-          const byName = query(membersCol, where('displayName', '==', v), limit(5));
-          const snap = await getDocs(byName);
-          const matches = snap.docs.map(d => ({ uid: d.id, email: d.data().email || '', name: d.data().displayName || '' }));
-          if (matches.length === 1) return matches[0].uid;
-          if (matches.length > 1) {
-            throw new Error(`發現多位同名「${v}」，請改用 Email 或 UID。`);
-          }
-        }
-
-        if (v.includes('@')) { // Email
-          const byEmail = query(membersCol, where('email', '==', v), limit(1));
-          const snap = await getDocs(byEmail);
-          if (!snap.empty) return snap.docs[0].id;
-          throw new Error(`找不到這個 Email 的成員：${v}`);
-        }
-
-        return v; // 當作 UID
-      }
-
-      async function promoteByInput(db, func, input) {
-        const targetUid = await resolveTargetToUid(db, input);
-        return (await callPromote(func)({ targetUid })).data;
-      }
-      async function revokeByInput(db, func, input) {
-        const targetUid = await resolveTargetToUid(db, input);
-        return (await callRevoke(func)({ targetUid })).data;
-      }
 
       /* 儲存班表（由 callable 寫入） */
       const sanitizeSchedule = (data)=>
