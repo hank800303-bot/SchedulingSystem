@@ -62,7 +62,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250928-51';
+    const CODE_VERSION = '20250928-52';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -509,35 +509,43 @@ useEffect(() => {
 
       const manualSave = ()=> saveScheduleDebounced(schedule);
 
-      /* 點格子切換班別（循環，含短暫冷卻避免過度連點） */
-      const handleShiftChange = (dayIndex, staffIndex)=>{
-        const cellKey = `${dayIndex}:${staffIndex}`;
-        if (hotCellsRef.current.has(cellKey)) return; // 冷卻中，避免跳兩格
-        hotCellsRef.current.add(cellKey);
-        setTimeout(()=>{ hotCellsRef.current.delete(cellKey); }, 150); // 150ms 冷卻
+      // 點格子切換班別（循環）
+const handleShiftChange = (dayIndex, staffIndex) => {
+  const ownerName = staffs[staffIndex];
+  if (!isAdmin) {
+    if (!myName || ownerName !== myName) {
+      setStatusMessage('你只能編輯自己的班表');
+      setTimeout(() => setStatusMessage(''), 1400);
+      return;
+    }
+  }
 
-        const ownerName = staffs[staffIndex];
-        if (!isAdmin) {
-          if (!myName || ownerName !== myName) {
-            setStatusMessage('你只能編輯自己的班表'); setTimeout(()=>setStatusMessage(''),1400);
-            return;
-          }
-        }
-        const next = (schedule && schedule.slice()) || [];
-        const cols = staffs.length;
-        next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
+  // 1) 先複製出「下一版」表格
+  const cols = staffs.length;
+  const next = (schedule && schedule.slice()) || [];
+  next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
-        const cur = next[dayIndex][staffIndex] || '';
-        const curText = (typeof cur === 'object') ? '請假' : cur;
-        const i = SHIFT_OPTIONS.indexOf(curText);
-        const nextText = SHIFT_OPTIONS[(i+1)%SHIFT_OPTIONS.length];
+  // 2) 讀取目前值，換算成文字（物件代表「請假」）
+  const cur = next[dayIndex][staffIndex];
+  const curText = (typeof cur === 'object') ? '請假' : (cur || '');
 
-        next[dayIndex][staffIndex] =
-          nextText==='請假' ? { shift:'請假', type:'未備註', days:1, notes:'' } : nextText;
+  // 3) 找到在 SHIFT_OPTIONS 的位置，若找不到就當作從 -1 開始（第一次點會到 0）
+  const i = SHIFT_OPTIONS.indexOf(curText);
+  const nextIndex = ((i >= 0 ? i : -1) + 1) % SHIFT_OPTIONS.length;
+  const nextText = SHIFT_OPTIONS[nextIndex];
 
-        setSchedule(next);         // 先在前端即時更新，操作流暢
-        saveScheduleDebounced(next); // 後端延後寫入
-      };
+  // 4) 寫入新值（請假用物件，其它用字串）
+  next[dayIndex][staffIndex] =
+    nextText === '請假'
+      ? { shift: '請假', type: '未備註', days: 1, notes: '' }
+      : nextText;
+
+  // 5) 立刻更新 UI（不阻塞點擊手感）
+  setSchedule(next);
+
+  // 6) 再用 debounce 後存檔（維持你現有的 saveScheduleDebounced）
+  saveScheduleDebounced(next);
+};
 
       /* 新增/刪除員工（新增只給管理員；員工 UI 不顯示） */
       const handleAddStaff = async ()=>{
@@ -1181,9 +1189,7 @@ useEffect(() => {
                         onClick={()=>setExportMode('simple')}
                         title="僅顯示姓名：班別"
                       >精簡</button>
-                    </div>
-                    <button onClick={downloadCalendarPDF}
-                            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700">下載（PDF）</button>
+                    </div>                  
                     <button onClick={printScheduleModal}
                             className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
                     <button onClick={()=>setExportOpen(false)}
