@@ -8,7 +8,8 @@
   <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.9/babel.min.js" crossorigin></script>
-  <!-- 產生 PDF 用（html2canvas + jsPDF；保留但建議使用友善列印） -->
+
+  <!-- 仍保留做備用；主要用友善列印 -->
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 
@@ -46,13 +47,15 @@
 
   <script type="text/babel" data-presets="env,react">
     const { useState, useEffect, useMemo, useRef } = React;
-    
+
+    // 依舊順序 + 新名單合併：新員工永遠長在最右邊
     function mergeStableOrder(prev = [], names = []) {
-    const setNew = new Set(names);
-    const kept = prev.filter(n => setNew.has(n));                 
-    const appended = names.filter(n => !kept.includes(n));        
-    return kept.concat(appended);                                 
-  }
+      const setNew = new Set(names);
+      const kept = prev.filter(n => setNew.has(n));
+      const appended = names.filter(n => !kept.includes(n));
+      return kept.concat(appended);
+    }
+
     const {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, getIdTokenResult,
@@ -61,8 +64,8 @@
       getFunctions, httpsCallable
     } = window.firebase;
 
-    /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250928-53';
+    /* ===== 常數 ===== */
+    const CODE_VERSION = '20250929-60';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -111,7 +114,7 @@
     const getDaysInMonth = (y,m)=> new Date(y, m+1, 0).getDate();
     const getDowName = (y,m,d)=> ['日','一','二','三','四','五','六'][ new Date(y,m,d).getDay() ];
 
-    // 營業時間（週一～五 09:00–22:00；週六 09:00–21:00；週日 09:30–21:00）
+    // 營業時間
     const getBusinessWindow = (date)=>{
       const dow=date.getDay();
       if(dow===0) return { open:toMin(9,30), close:toMin(21,0) };
@@ -218,7 +221,7 @@
       return html;
     }
 
-        /* ===== App ===== */
+    /* ===== App ===== */
     function App(){
       const [db,setDb] = useState(null);
       const [auth,setAuth] = useState(null);
@@ -268,8 +271,12 @@
       // 儲存狀態
       const [saving, setSaving] = useState(false);
 
-      // 點格子短暫冷卻（避免延遲造成過度連點）
-      const hotCellsRef = useRef(new Set());
+      // 管理員工具列
+      const [adminTarget, setAdminTarget] = useState('');
+      const [adminBusy, setAdminBusy] = useState(false);
+
+      // 點格子冷卻：避免延遲造成過度連點
+      const hotCellsRef = useRef(new Set()); // key: `${dayIndex}-${staffIndex}`
 
       const prevUidRef = useRef(null);
       useEffect(() => {
@@ -296,18 +303,15 @@
         const _func = getFunctions(app, FUNCTIONS_REGION);
         setDb(_db); setAuth(_auth); setFunc(_func);
         window.func = _func;
-        window.callAdd = (name) => httpsCallable(_func, 'addStaff')({ workspaceId: WORKSPACE_ID, name });
 
         const unsub = onAuthStateChanged(_auth, async (cur) => {
           setUser(cur || null);
           if (!cur) { setIsAdmin(false); return; }
 
           try {
-            // 1) 先用現有 token 判斷
             const r1 = await cur.getIdTokenResult();
             let adminFlag = !!r1.claims?.admin;
 
-            // 2) 非 admin 且尚未刷新過 → 強制刷新一次再看
             if (!adminFlag && !claimsRefreshedOnce.current) {
               claimsRefreshedOnce.current = true;
               await cur.getIdToken(true);
@@ -321,7 +325,7 @@
             }
             setIsAdmin(adminFlag);
 
-            // 3) 載入個人檔案
+            // 載入個人檔案
             try {
               const prefRef = doc(_db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members/${cur.uid}`);
               const snap = await getDoc(prefRef);
@@ -340,11 +344,6 @@
 
         return () => unsub();
       }, []);
-
-      window.debugIsAdmin = () => {
-        console.log('isAdmin state =', isAdmin);
-        return isAdmin;
-      };
 
       /* 今日我的打卡（最近兩筆） */
       useEffect(()=>{
@@ -426,27 +425,25 @@
         }
       }
 
-      /* === 監看員工名單 === */
-      const prevStaffsRef = React.useRef([]);
+      /* === 監看員工名單（保持新增於最右） === */
+      const prevStaffsRef = useRef([]);
+      useEffect(() => {
+        if (!db || !user) return;
+        const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+        return onSnapshot(ref, (snap) => {
+          const names = snap.exists() ? (snap.data().names || []) : [];
+          const safe = Array.isArray(names) ? names : [];
+          const merged = mergeStableOrder(prevStaffsRef.current, safe);
+          prevStaffsRef.current = merged;
+          setStaffs(merged);
+        }, (err) => {
+          console.warn('watch staffList error', err);
+          prevStaffsRef.current = [];
+          setStaffs([]);
+        });
+      }, [db, user]);
 
-useEffect(() => {
-  if (!db || !user) return;
-  const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-  return onSnapshot(ref, (snap) => {
-    const names = snap.exists() ? (snap.data().names || []) : [];
-    const safe = Array.isArray(names) ? names : [];
-    // 用舊順序+新名單做「穩定合併」，確保新員工永遠長在最右邊
-    const merged = mergeStableOrder(prevStaffsRef.current, safe);
-    prevStaffsRef.current = merged;
-    setStaffs(merged);
-  }, (err) => {
-    console.warn('watch staffList error', err);
-    prevStaffsRef.current = [];
-    setStaffs([]);
-  });
-}, [db, user]);
-
-      /* === 監看當月班表 === */
+      /* === 監看當月班表（欄位：schedule） === */
       useEffect(() => {
         if (!db || !user) return;
         const y = currentDate.getFullYear();
@@ -487,6 +484,44 @@ useEffect(() => {
         const res = await callable({ workspaceId: WORKSPACE_ID, monthId, schedule: scheduleJson });
         return res.data;
       };
+      const callPromote = (func) => httpsCallable(func, 'promoteToAdmin');
+      const callRevoke  = (func) => httpsCallable(func, 'revokeAdmin');
+
+      /* 解析輸入（姓名 / Email / UID）→ 目標 UID（管理員工具列用） */
+      async function resolveTargetToUid(db, input) {
+        const v = (input || '').trim();
+        if (!v) throw new Error('請輸入姓名、Email 或 UID');
+
+        const membersCol = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/members`);
+
+        if (!v.includes('@')) { // 姓名
+          const byName = query(membersCol, where('displayName', '==', v), limit(5));
+          const snap = await getDocs(byName);
+          const matches = snap.docs.map(d => ({ uid: d.id, email: d.data().email || '', name: d.data().displayName || '' }));
+          if (matches.length === 1) return matches[0].uid;
+          if (matches.length > 1) {
+            throw new Error(`發現多位同名「${v}」，請改用 Email 或 UID。`);
+          }
+        }
+
+        if (v.includes('@')) { // Email
+          const byEmail = query(membersCol, where('email', '==', v), limit(1));
+          const snap = await getDocs(byEmail);
+          if (!snap.empty) return snap.docs[0].id;
+          throw new Error(`找不到這個 Email 的成員：${v}`);
+        }
+
+        return v; // 當作 UID
+      }
+
+      async function promoteByInput(db, func, input) {
+        const targetUid = await resolveTargetToUid(db, input);
+        return (await callPromote(func)({ targetUid })).data;
+      }
+      async function revokeByInput(db, func, input) {
+        const targetUid = await resolveTargetToUid(db, input);
+        return (await callRevoke(func)({ targetUid })).data;
+      }
 
       /* 儲存班表（由 callable 寫入） */
       const sanitizeSchedule = (data)=>
@@ -498,80 +533,67 @@ useEffect(() => {
           setSaving(true);
           const y=currentDate.getFullYear(), m=currentDate.getMonth()+1, monthId=`${y}-${pad2(m)}`;
           await callSaveSchedule(monthId, JSON.stringify(sanitizeSchedule(scheduleData)));
-          setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''),1200);
+          setStatusMessage('班表已儲存！'); setTimeout(()=>setStatusMessage(''),1000);
         }catch(e){
           console.error('save schedule fail', e);
           setStatusMessage(`儲存失敗：${e.code||e.message||e}`); setTimeout(()=>setStatusMessage(''),2000);
         }finally{
           setSaving(false);
         }
-      }, 800); // 延長到 800ms，降低頻率
+      }, 800); // 降低頻率
 
       const manualSave = ()=> saveScheduleDebounced(schedule);
 
-      // 點格子切換班別（循環）
-// 點格子切換班別（更耐用版本）
-const handleShiftChange = (dayIndex, staffIndex) => {
-  const ownerName = staffs[staffIndex];
+      /* 點格子切換班別（循環 + 冷卻 250ms + 即時更新） */
+      const handleShiftChange = (dayIndex, staffIndex) => {
+        const ownerName = staffs[staffIndex];
 
-  // 權限：員工只能改自己
-  if (!isAdmin) {
-    if (!myName || ownerName !== myName) {
-      setStatusMessage('你只能編輯自己的班表');
-      setTimeout(() => setStatusMessage(''), 1400);
-      return;
-    }
-  }
+        // 權限：只有管理員或本人可編輯
+        if (!isAdmin) {
+          if (!myName || ownerName !== myName) {
+            setStatusMessage('你只能編輯自己的班表');
+            setTimeout(() => setStatusMessage(''), 1200);
+            return;
+          }
+        }
 
-  // --- 點擊降噪：300ms 內只吃一次，防止延遲造成過度循環 ---
-  const key = `${dayIndex}:${staffIndex}`;
-  if (!handleShiftChange._hot) handleShiftChange._hot = new Map();
-  const last = handleShiftChange._hot.get(key) || 0;
-  const now = Date.now();
-  if (now - last < 300) return; // 忽略過密點擊
-  handleShiftChange._hot.set(key, now);
-  setTimeout(() => handleShiftChange._hot.delete(key), 320);
+        // 點擊冷卻，避免延遲造成跳兩格
+        const key = `${dayIndex}-${staffIndex}`;
+        if (hotCellsRef.current.has(key)) return;
+        hotCellsRef.current.add(key);
+        setTimeout(() => {
+          hotCellsRef.current.delete(key);
+        }, 250);
 
-  // 1) 複製目前表格
-  const cols = staffs.length;
-  const next = (schedule && schedule.slice()) || [];
+        // 產生下一版
+        const cols = staffs.length;
+        const next = (schedule && schedule.slice()) || [];
+        next[dayIndex] = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : Array(cols).fill('');
 
-  // 2) 取得該天 row，並「補齊到與員工數相同長度」
-  const row = Array.isArray(next[dayIndex]) ? next[dayIndex].slice() : [];
-  while (row.length < cols) row.push(''); // 重要：補齊空白欄
+        const cur = next[dayIndex][staffIndex];
+        const curText = (typeof cur === 'object') ? '請假' : (cur || '');
+        const i = SHIFT_OPTIONS.indexOf(curText);
+        const nextIndex = ((i >= 0 ? i : -1) + 1) % SHIFT_OPTIONS.length;
+        const nextText = SHIFT_OPTIONS[nextIndex];
 
-  // 3) 取目前值 -> 文字（物件即代表「請假」）
-  const cur = row[staffIndex];
-  const curText = (typeof cur === 'object') ? '請假' : (cur || '');
+        next[dayIndex][staffIndex] =
+          nextText === '請假'
+            ? { shift: '請假', type: '未備註', days: 1, notes: '' }
+            : nextText;
 
-  // 4) 從 SHIFT_OPTIONS 找索引；找不到就從 -1 起算（第一次點會到 0）
-  const i = SHIFT_OPTIONS.indexOf(curText);
-  const nextIndex = ((i >= 0 ? i : -1) + 1) % SHIFT_OPTIONS.length;
-  const nextText = SHIFT_OPTIONS[nextIndex];
+        // 先更新 UI，再延遲存檔
+        setSchedule(next);
+        saveScheduleDebounced(next);
+      };
 
-  // 5) 寫回 row（請假用物件，其它用字串）
-  row[staffIndex] = (nextText === '請假')
-    ? { shift: '請假', type: '未備註', days: 1, notes: '' }
-    : nextText;
-
-  next[dayIndex] = row;
-
-  // 6) 先更新 UI，再用 debounce 存檔（避免阻塞點擊手感）
-  setSchedule(next);
-  saveScheduleDebounced(next);
-
-  // 7) 若後端規則不允許目前身分寫入，會在 Console 出現 callable 錯誤，
-  //    並且 onSnapshot 很快把它覆蓋回舊值，看起來像「點了沒變」。
-  //    這時請確認後端 saveSchedule 的權限是否允許員工改「自己的那一欄」。
-};
       /* 新增/刪除員工（新增只給管理員；員工 UI 不顯示） */
       const handleAddStaff = async ()=>{
         const name = (newStaffName || '').trim();
-        if(!name){ setStatusMessage('請輸入姓名'); setTimeout(()=>setStatusMessage(''),1200); return; }
+        if(!name){ setStatusMessage('請輸入姓名'); setTimeout(()=>setStatusMessage(''),1000); return; }
         try{
           await callAddStaff(name);
           setNewStaffName('');
-          setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
+          setStatusMessage('新增員工成功！'); setTimeout(()=>setStatusMessage(''),1000);
         }catch(e){
           console.error('addStaff fail', e);
           setStatusMessage(`新增失敗：${e.code||e.message||e}`); setTimeout(()=>setStatusMessage(''),2000);
@@ -580,7 +602,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
 
       const handleDeleteStaff = (name)=>{
         if (!isAdmin) {
-          setStatusMessage('只有管理員可以刪除員工'); setTimeout(()=>setStatusMessage(''),1400);
+          setStatusMessage('只有管理員可以刪除員工'); setTimeout(()=>setStatusMessage(''),1200);
           return;
         }
         setStaffToDel(name); setConfirmOpen(true);
@@ -590,7 +612,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         if (!isAdmin) { setConfirmOpen(false); setStaffToDel(null); return; }
         try{
           await callRemoveStaff(name);
-          setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1200);
+          setStatusMessage('刪除員工成功！'); setTimeout(()=>setStatusMessage(''),1000);
         }catch(e){
           console.error('removeStaff fail', e);
           setStatusMessage(`刪除員工失敗：${e.code||e.message||e}`); setTimeout(()=>setStatusMessage(''),2000);
@@ -652,42 +674,6 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         }, 600);
       };
 
-      /* 匯出：下載 PDF（保留） */
-      const downloadCalendarPDF = async ()=>{
-        const el = exportRef.current;
-        if(!el){ setStatusMessage('請先開啟「匯出班表」視窗'); setTimeout(()=>setStatusMessage(''),1500); return; }
-        try{
-          const prevWidth = el.style.width;
-          el.style.width = '1120px';
-          await new Promise(r => setTimeout(r, 50));
-
-          const canvas = await html2canvas(el, { backgroundColor:'#ffffff', scale: 2, useCORS: true });
-          el.style.width = prevWidth || '';
-
-          const imgData = canvas.toDataURL('image/png');
-          const { jsPDF } = window.jspdf;
-          const pdf = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
-          const pageW = pdf.internal.pageSize.getWidth();
-          const pageH = pdf.internal.pageSize.getHeight();
-
-          let drawW = pageW;
-          let drawH = (canvas.height * drawW) / canvas.width;
-          if (drawH > pageH) {
-            drawH = pageH;
-            drawW = (canvas.width * drawH) / canvas.height;
-          }
-          const offsetX = (pageW - drawW) / 2;
-          const offsetY = (pageH - drawH) / 2;
-
-          const y = currentDate.getFullYear(), m = currentDate.getMonth()+1;
-          pdf.addImage(imgData, 'PNG', offsetX, offsetY, drawW, drawH);
-          pdf.save(`班表_${y}-${pad2(m)}.pdf`);
-        }catch(e){
-          console.error('PDF 產生失敗：', e);
-          setStatusMessage(`PDF 產生失敗：${e.message||e}`); setTimeout(()=>setStatusMessage(''),2500);
-        }
-      };
-
       /* 友善列印（A4 橫式單頁 → 建議用這個再另存 PDF） */
       const printScheduleModal = ()=>{
         const y=currentDate.getFullYear(), m0=currentDate.getMonth();
@@ -706,7 +692,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         try{
           const monthKey = ymLocal(currentDate);
           const flatRef = collection(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/attendance_flat_logs`);
-          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000)); // Firestore 上限 10k
+          const qy = query(flatRef, where('monthKey','==',monthKey), limit(10000));
           const snap = await getDocs(qy);
 
           const byUid = new Map();
@@ -798,7 +784,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
         }
       };
 
-          /* 統計（表尾） */
+      /* 統計（表尾） */
       const stats = useMemo(()=>{
         const result = staffs.reduce((acc,n)=>(acc[n]={totalDays:0,totalHours:0,leaveDays:0}, acc), {});
         const y=currentDate.getFullYear(), m=currentDate.getMonth();
@@ -978,7 +964,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
             </div>
           </div>
 
-          {/* 控制列 */}
+          {/* 控制列 + 管理員工具列 */}
           <div className="bg-white rounded-xl shadow-lg p-5 mb-6">
             <div className="flex flex-col md:flex-row items-center justify-between gap-3">
               <div className="flex gap-2 w-full md:w-auto">
@@ -999,7 +985,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                         className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">下一月</button>
               </div>
 
-              {/* 這塊僅管理員可見：新增員工 + 刪除權限原樣 */}
+              {/* 管理員可見：新增員工 */}
               {isAdmin && (
                 <div className="flex flex-wrap md:flex-nowrap items-stretch md:items-center gap-2 w-full md:w-auto">
                   <input
@@ -1028,6 +1014,55 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                         className="px-4 py-2 bg-fuchsia-600 text-white rounded-lg hover:bg-fuchsia-700 whitespace-nowrap">打卡明細（本月）</button>
               </div>
             </div>
+
+            {/* 管理員工具列：升/降管理員 */}
+            {isAdmin && (
+              <div className="mt-4 border-t pt-4">
+                <h3 className="font-semibold mb-2">管理員工具列</h3>
+                <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                  <input
+                    value={adminTarget}
+                    onChange={e=>setAdminTarget(e.target.value)}
+                    placeholder="輸入姓名 / Email / UID"
+                    className="border rounded-lg px-3 py-2 flex-1 min-w-[260px]"
+                  />
+                  <button
+                    onClick={async ()=>{
+                      try{
+                        setAdminBusy(true);
+                        await promoteByInput(db, func, adminTarget);
+                        setStatusMessage('已升級為管理員');
+                        setTimeout(()=>setStatusMessage(''),1000);
+                      }catch(e){
+                        setStatusMessage(`升級失敗：${e.message||e}`);
+                        setTimeout(()=>setStatusMessage(''),2000);
+                      }finally{ setAdminBusy(false); }
+                    }}
+                    className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60"
+                    disabled={adminBusy}
+                  >升級為管理員</button>
+
+                  <button
+                    onClick={async ()=>{
+                      try{
+                        setAdminBusy(true);
+                        await revokeByInput(db, func, adminTarget);
+                        setStatusMessage('已取消管理員');
+                        setTimeout(()=>setStatusMessage(''),1000);
+                      }catch(e){
+                        setStatusMessage(`取消失敗：${e.message||e}`);
+                        setTimeout(()=>setStatusMessage(''),2000);
+                      }finally{ setAdminBusy(false); }
+                    }}
+                    className="px-3 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 disabled:opacity-60"
+                    disabled={adminBusy}
+                  >取消管理員</button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  提示：若用「姓名」查到多位同名，系統會要求改用 Email 或 UID。
+                </p>
+              </div>
+            )}
 
             <div className="mt-4 text-sm text-gray-700 space-y-1">
               <div className="flex flex-wrap gap-4">
@@ -1085,16 +1120,12 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                           const editable = isAdmin || (myName && ownerName === myName);
 
                           return (
-                            <td
-                              key={idx}
-                              className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0"
-                            >
+                            <td key={idx} className="px-2 py-2 border-r-2 border-gray-300 text-center w-[120px] min-w-[120px] md:w-auto md:min-w-0">
                               <div
-                                onClick={() => editable ? handleShiftChange(dayIdx, idx) : setStatusMessage('你只能編輯自己的班表')||setTimeout(()=>setStatusMessage(''),1000)}
+                                onClick={() => editable ? handleShiftChange(dayIdx, idx) : (setStatusMessage('你只能編輯自己的班表'), setTimeout(()=>setStatusMessage(''),900))}
                                 className={`p-1.5 md:p-2 rounded-lg ${editable ? 'cursor-pointer hover:shadow-md' : 'opacity-60 cursor-not-allowed'} transition text-xs md:text-sm ${cls}`}
                                 title={editable ? '' : '非管理員只能編輯自己'}
                               >
-                                {/* 顯示班別與時段 */}
                                 {(() => {
                                   const text = getShiftText(cur);
                                   if (!text) return '';
@@ -1206,7 +1237,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                         onClick={()=>setExportMode('simple')}
                         title="僅顯示姓名：班別"
                       >精簡</button>
-                    </div>                  
+                    </div>
                     <button onClick={printScheduleModal}
                             className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded hover:bg-slate-800">友善列印</button>
                     <button onClick={()=>setExportOpen(false)}
@@ -1227,7 +1258,7 @@ const handleShiftChange = (dayIndex, staffIndex) => {
                         const y = currentDate.getFullYear(), m = currentDate.getMonth();
                         const first = new Date(y, m, 1);
                         const total = getDaysInMonth(y, m);
-                        const firstDowMonStart = (first.getDay() + 6) % 7; // Mon=0
+                        const firstDowMonStart = (first.getDay() + 6) % 7;
                         const cells = Array.from({length:firstDowMonStart}, ()=>null)
                                            .concat(Array.from({length: total}, (_,i)=> i+1));
                         while (cells.length % 7 !== 0) cells.push(null);
