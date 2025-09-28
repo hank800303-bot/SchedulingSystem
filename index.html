@@ -46,7 +46,13 @@
 
   <script type="text/babel" data-presets="env,react">
     const { useState, useEffect, useMemo, useRef } = React;
-
+    
+    function mergeStableOrder(prev = [], names = []) {
+    const setNew = new Set(names);
+    const kept = prev.filter(n => setNew.has(n));                 
+    const appended = names.filter(n => !kept.includes(n));        
+    return kept.concat(appended);                                 
+  }
     const {
       initializeApp, getAuth, onAuthStateChanged,
       createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, getIdTokenResult,
@@ -56,7 +62,7 @@
     } = window.firebase;
 
     /* ===== 版本與 App 常數 ===== */
-    const CODE_VERSION = '20250928-50';
+    const CODE_VERSION = '20250928-51';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -421,17 +427,24 @@
       }
 
       /* === 監看員工名單 === */
-      useEffect(() => {
-        if (!db || !user) return;
-        const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
-        return onSnapshot(ref, (snap) => {
-          const names = snap.exists() ? (snap.data().names || []) : [];
-          setStaffs(Array.isArray(names) ? names : []);
-        }, (err) => {
-          console.warn('watch staffList error', err);
-          setStaffs([]);
-        });
-      }, [db, user]);
+      const prevStaffsRef = React.useRef([]);
+
+useEffect(() => {
+  if (!db || !user) return;
+  const ref = doc(db, `artifacts/${APP_ID}/workspaces/${WORKSPACE_ID}/staffs/staffList`);
+  return onSnapshot(ref, (snap) => {
+    const names = snap.exists() ? (snap.data().names || []) : [];
+    const safe = Array.isArray(names) ? names : [];
+    // 用舊順序+新名單做「穩定合併」，確保新員工永遠長在最右邊
+    const merged = mergeStableOrder(prevStaffsRef.current, safe);
+    prevStaffsRef.current = merged;
+    setStaffs(merged);
+  }, (err) => {
+    console.warn('watch staffList error', err);
+    prevStaffsRef.current = [];
+    setStaffs([]);
+  });
+}, [db, user]);
 
       /* === 監看當月班表 === */
       useEffect(() => {
