@@ -202,9 +202,19 @@
       '<!doctype html><html lang="zh-TW"><head><meta charset="utf-8"/>'
       +'<meta name="viewport" content="width=device-width, initial-scale=1.0"/>'
       +'<title>'+ y + '年' + (String(m).padStart(2,"0")) + '月 班表</title>'
-      +'<style>*{box-sizing:border-box}@page{size:A4 landscape;margin:8mm}'
-      +'@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}'
-      +'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;margin:0;padding:8mm;color:#111;background:#fff}'
+      +'<style>*{box-sizing:border-box}'
++  '@page{size:A4 landscape;margin:0}'                 /* 關掉印表機邊界 */
++  '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}'
++  'html,body{margin:0;padding:0;background:#fff}'
++  /* 固定成 A4 橫式內頁尺寸（297×210mm），自己留 10mm 內邊距 */
++  'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,"Noto Sans TC",sans-serif;'
++       'width: calc(297mm - 20mm);'
++       'height: calc(210mm - 20mm);'
++       'padding:10mm;color:#111;overflow:hidden}'
++  /* 避免被強制分頁 */
++  '.week,.grid,.cell{break-inside:avoid;page-break-inside:avoid}'
++  'h1{margin:0 0 3.5mm;font-size:11pt}...'
++ '</style>'
       +'h1{margin:0 0 3.5mm;font-size:11pt}.week{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:1.6mm;color:#6b7280;font-weight:600;text-align:center;font-size:9.5pt;break-after:avoid-page;page-break-after:avoid}'
       +'.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1.8mm;break-inside:auto;page-break-inside:auto}'
       +'.cell{min-height:28.5mm;border:0.3mm solid #e5e7eb;border-radius:2mm;padding:1.8mm}'
