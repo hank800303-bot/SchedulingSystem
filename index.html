@@ -65,7 +65,7 @@
     } = window.firebase;
 
     /* ===== 常數 ===== */
-    const CODE_VERSION = '20250929-63';
+    const CODE_VERSION = '20250929-64';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
@@ -275,12 +275,12 @@
 const dirtyRef = useRef(false);
 const autosaveTimerRef = useRef(null);
 
-function markDirtyAndAutosave() {
-  dirtyRef.current = true;
+function markDirtyAndAutosave(latestSchedule) {
+   dirtyRef.current = true;
   if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
   autosaveTimerRef.current = setTimeout(() => {
     if (!dirtyRef.current) return;
-    saveScheduleDebounced(schedule); // 用你原本的 debounce(800ms) 做最後節流
+    saveScheduleDebounced(latestSchedule);
     dirtyRef.current = false;
   }, AUTO_SAVE_DELAY_MS);
 }
@@ -588,7 +588,7 @@ async function revokeByInput(_db, _func, input) {
 
         // 先更新 UI，再延遲存檔
         setSchedule(next);
-        markDirtyAndAutosave();
+        markDirtyAndAutosave(next);
       };
 
       /* 新增/刪除員工（新增只給管理員；員工 UI 不顯示） */
