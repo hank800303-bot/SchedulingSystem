@@ -65,11 +65,12 @@
     } = window.firebase;
 
     /* ===== 常數 ===== */
-    const CODE_VERSION = '20250929-60';
+    const CODE_VERSION = '20250929-62';
     const APP_ID = 'zhenan-scheduler';
     const WORKSPACE_ID = 'main';
     const FUNCTIONS_REGION = 'asia-east1';
-
+    const AUTO_SAVE_DELAY_MS = 1200;
+    
     const firebaseConfig = {
       apiKey: "AIzaSyA0RjZ0RXst__qzv4e281LUOh2zdiMgmd0",
       authDomain: "zhenan-scheduler.firebaseapp.com",
@@ -270,6 +271,23 @@
 
       // 儲存狀態
       const [saving, setSaving] = useState(false);
+      // === 髒資料旗標＋自動存檔（避免每點一下就打 API） ===
+const dirtyRef = useRef(false);
+const autosaveTimerRef = useRef(null);
+
+function markDirtyAndAutosave() {
+  dirtyRef.current = true;
+  if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+  autosaveTimerRef.current = setTimeout(() => {
+    if (!dirtyRef.current) return;
+    saveScheduleDebounced(schedule); // 用你原本的 debounce(800ms) 做最後節流
+    dirtyRef.current = false;
+  }, AUTO_SAVE_DELAY_MS);
+}
+
+useEffect(() => {
+  return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
+}, []);
 
       // 管理員工具列
       const [adminTarget, setAdminTarget] = useState('');
@@ -465,27 +483,29 @@
         });
       }, [db, user, currentDate]);
 
-      /* ====== Cloud Functions（callable）封裝 ====== */
-      const callAddStaff = async (name) => {
-        if(!func) throw new Error('Functions not ready');
-        const callable = httpsCallable(func, 'addStaff');
-        const res = await callable({ workspaceId: WORKSPACE_ID, name });
-        return res.data;
-      };
-      const callRemoveStaff = async (name) => {
-        if(!func) throw new Error('Functions not ready');
-        const callable = httpsCallable(func, 'removeStaff');
-        const res = await callable({ workspaceId: WORKSPACE_ID, name });
-        return res.data;
-      };
-      const callSaveSchedule = async (monthId, scheduleJson) => {
-        if(!func) throw new Error('Functions not ready');
-        const callable = httpsCallable(func, 'saveSchedule');
-        const res = await callable({ workspaceId: WORKSPACE_ID, monthId, schedule: scheduleJson });
-        return res.data;
-      };
-      const callPromote = (func) => httpsCallable(func, 'promoteToAdmin');
-      const callRevoke  = (func) => httpsCallable(func, 'revokeAdmin');
+      // ===== 直接把 identifier 丟給雲端，後端負責解析 =====
+const callPromote = async (identifier) => {
+  if (!func) throw new Error('Functions not ready');
+  const r = await httpsCallable(func, 'promoteToAdmin')({
+    identifier, workspaceId: WORKSPACE_ID
+  });
+  return r.data;
+};
+const callRevoke = async (identifier) => {
+  if (!func) throw new Error('Functions not ready');
+  const r = await httpsCallable(func, 'revokeAdmin')({
+    identifier, workspaceId: WORKSPACE_ID
+  });
+  return r.data;
+};
+
+// 管理員工具列用（保留語意名稱）
+async function promoteByInput(_db, _func, input) {
+  return callPromote((input || '').trim());
+}
+async function revokeByInput(_db, _func, input) {
+  return callRevoke((input || '').trim());
+}
 
       /* 解析輸入（姓名 / Email / UID）→ 目標 UID（管理員工具列用） */
       async function resolveTargetToUid(db, input) {
@@ -583,7 +603,7 @@
 
         // 先更新 UI，再延遲存檔
         setSchedule(next);
-        saveScheduleDebounced(next);
+        markDirtyAndAutosave();
       };
 
       /* 新增/刪除員工（新增只給管理員；員工 UI 不顯示） */
